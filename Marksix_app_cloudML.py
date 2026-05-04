@@ -1138,10 +1138,12 @@ def display_centered_dataframe(df, key=None):
     st.dataframe(df, use_container_width=True, hide_index=True, key=key)
 
 # ==================== 管理员页面 ====================
+# ==================== 增强版管理员页面（带可编辑表格） ====================
 def show_admin_page():
     with st.expander("🔧 管理员控制台", expanded=True):
         st.subheader("📁 历史数据管理")
         
+        # 加载当前数据
         current_draws = load_draws_from_supabase()
         if current_draws:
             st.success(f"✅ 当前云端有 {len(current_draws)} 期数据")
@@ -1152,55 +1154,321 @@ def show_admin_page():
         
         st.markdown("---")
         
-        edit_mode = st.radio(
-            "选择编辑方式",
-            ["📄 粘贴数据添加", "📎 上传Excel文件"],
+        # 选择操作模式
+        admin_mode = st.radio(
+            "选择操作",
+            ["✏️ 直接编辑表格", "📄 粘贴数据添加", "📎 上传Excel文件", "🗑️ 清空所有数据"],
             horizontal=True,
-            key="edit_mode_admin"
+            key="admin_mode"
         )
         
-        parsed_draws = None
+        # ========== 模式1：直接编辑表格 ==========
+        if admin_mode == "✏️ 直接编辑表格":
+            st.markdown("""
+            **💡 使用说明**
+            - 双击单元格可直接编辑内容
+            - 点击列标题可排序
+            - 点击行首的 `+` 可新增行
+            - 选中行后按 `Delete` 可删除行
+            - 编辑完成后点击 **💾 保存到Supabase** 按钮
+            """)
+            
+            if current_draws:
+                # 转换为DataFrame用于编辑
+                df_current = pd.DataFrame(current_draws)
+                df_current = df_current.rename(columns={
+                    'period': '期次',
+                    'date': '開獎日期',
+                    'numbers': '正码(6个)',
+                    'special': '特码',
+                    'sum': '和值'
+                })
+                # 将numbers列表转换为字符串
+                df_current['正码(6个)'] = df_current['正码(6个)'].apply(
+                    lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x)
+                )
+                df_current['開獎日期'] = df_current['開獎日期'].apply(
+                    lambda x: str(x)[:10] if pd.notna(x) else ''
+                )
+                
+                # 排序选项
+                sort_col1, sort_col2 = st.columns([1, 3])
+                with sort_col1:
+                    sort_order = st.selectbox(
+                        "默认排序",
+                        ["期次降序(最新在上)", "期次升序(最旧在上)", "原始顺序"],
+                        key="sort_order_edit"
+                    )
+                
+                if sort_order == "期次降序(最新在上)":
+                    df_current = df_current.sort_values(by='期次', ascending=False)
+                elif sort_order == "期次升序(最旧在上)":
+                    df_current = df_current.sort_values(by='期次', ascending=True)
+                
+                with sort_col2:
+                    st.caption(f"📊 共 {len(df_current)} 期数据 | 💡 也可点击列标题自定义排序")
+                
+                # 可编辑表格
+                edited_df = st.data_editor(
+                    df_current,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key="data_editor_admin",
+                    column_config={
+                        "期次": st.column_config.NumberColumn("期次", required=True, step=1),
+                        "開獎日期": st.column_config.TextColumn("開獎日期", help="格式: YYYY-MM-DD"),
+                        "正码(6个)": st.column_config.TextColumn("正码(6个)", required=True, help="格式: 1,2,3,4,5,6"),
+                        "特码": st.column_config.NumberColumn("特码", required=True, min_value=1, max_value=49),
+                        "和值": st.column_config.NumberColumn("和值", disabled=True, help="自动计算"),
+                    }
+                )
+                
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("💾 保存到Supabase", type="primary", key="save_edited"):
+                        if edited_df is not None:
+                            new_draws = []
+                            errors = []
+                            
+                            for idx, row in edited_df.iterrows():
+                                try:
+                                    # 解析期次
+                                    period = int(row['期次']) if pd.notna(row['期次']) else None
+                                    if period is None:
+                                        errors.append(f"第{idx+1}行: 期次不能为空")
+                                        continue
+                                    
+                                    # 解析日期
+                                    date_val = row['開獎日期']
+                                    date_str = None
+                                    if pd.notna(date_val) and str(date_val).strip():
+                                        date_str = str(date_val).strip()
+                                        if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                                            pass
+                                        else:
+                                            # 尝试多种日期格式
+                                            for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"]:
+                                                try:
+                                                    dt = datetime.strptime(date_str, fmt)
+                                                    date_str = dt.strftime("%Y-%m-%d")
+                                                    break
+                                                except:
+                                                    pass
+                                    
+                                    # 解析正码
+                                    numbers_str = str(row['正码(6个)']).strip()
+                                    if not numbers_str:
+                                        errors.append(f"第{idx+1}行: 正码不能为空")
+                                        continue
+                                    
+                                    numbers_list = []
+                                    for part in numbers_str.replace(' ', '').split(','):
+                                        if part.strip():
+                                            num = int(float(part.strip()))
+                                            if 1 <= num <= 49:
+                                                numbers_list.append(num)
+                                            else:
+                                                errors.append(f"第{idx+1}行: 正码 {num} 超出范围(1-49)")
+                                                break
+                                    
+                                    if len(numbers_list) != 6:
+                                        errors.append(f"第{idx+1}行: 正码需要6个，当前有{len(numbers_list)}个")
+                                        continue
+                                    
+                                    # 解析特码
+                                    special = int(row['特码']) if pd.notna(row['特码']) else None
+                                    if special is None or not (1 <= special <= 49):
+                                        errors.append(f"第{idx+1}行: 特码必须在1-49之间")
+                                        continue
+                                    
+                                    new_draws.append({
+                                        'period': period,
+                                        'date': date_str,
+                                        'numbers': sorted(numbers_list),
+                                        'special': special,
+                                        'sum': sum(sorted(numbers_list))
+                                    })
+                                    
+                                except Exception as e:
+                                    errors.append(f"第{idx+1}行: 解析错误 - {str(e)}")
+                            
+                            if errors:
+                                for err in errors:
+                                    st.error(err)
+                            elif new_draws:
+                                with st.spinner("正在保存..."):
+                                    if save_draws_to_supabase(new_draws):
+                                        st.success(f"✅ 成功保存 {len(new_draws)} 期数据到Supabase！")
+                                        st.balloons()
+                                        st.rerun()
+                                    else:
+                                        st.error("保存失败")
+                            else:
+                                st.warning("没有有效数据可保存")
+                
+                with col2:
+                    if st.button("🔄 刷新数据", key="refresh_edited"):
+                        st.cache_data.clear()
+                        st.rerun()
+            else:
+                st.warning("📭 云端暂无数据，请通过下方方式添加数据")
+                
+                # 创建空表格
+                st.markdown("### ➕ 创建新数据")
+                empty_df = pd.DataFrame(columns=['期次', '開獎日期', '正码(6个)', '特码', '和值'])
+                edited_df = st.data_editor(
+                    empty_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key="empty_data_editor",
+                    column_config={
+                        "期次": st.column_config.NumberColumn("期次", required=True, step=1),
+                        "開獎日期": st.column_config.TextColumn("開獎日期", help="格式: YYYY-MM-DD"),
+                        "正码(6个)": st.column_config.TextColumn("正码(6个)", required=True, help="格式: 1,2,3,4,5,6"),
+                        "特码": st.column_config.NumberColumn("特码", required=True, min_value=1, max_value=49),
+                        "和值": st.column_config.NumberColumn("和值", disabled=True),
+                    }
+                )
+                
+                if st.button("💾 保存到Supabase", type="primary", key="save_new"):
+                    if edited_df is not None and len(edited_df) > 0:
+                        new_draws = []
+                        errors = []
+                        for idx, row in edited_df.iterrows():
+                            try:
+                                period = int(row['期次']) if pd.notna(row['期次']) else None
+                                if period is None:
+                                    errors.append(f"第{idx+1}行: 期次不能为空")
+                                    continue
+                                
+                                date_val = row['開獎日期']
+                                date_str = None
+                                if pd.notna(date_val) and str(date_val).strip():
+                                    date_str = str(date_val).strip()
+                                
+                                numbers_str = str(row['正码(6个)']).strip()
+                                numbers_list = []
+                                for part in numbers_str.replace(' ', '').split(','):
+                                    if part.strip():
+                                        num = int(float(part.strip()))
+                                        if 1 <= num <= 49:
+                                            numbers_list.append(num)
+                                        else:
+                                            errors.append(f"第{idx+1}行: 正码 {num} 超出范围")
+                                            break
+                                
+                                if len(numbers_list) != 6:
+                                    errors.append(f"第{idx+1}行: 正码需要6个，当前{len(numbers_list)}个")
+                                    continue
+                                
+                                special = int(row['特码']) if pd.notna(row['特码']) else None
+                                if special is None or not (1 <= special <= 49):
+                                    errors.append(f"第{idx+1}行: 特码必须在1-49之间")
+                                    continue
+                                
+                                new_draws.append({
+                                    'period': period,
+                                    'date': date_str,
+                                    'numbers': sorted(numbers_list),
+                                    'special': special,
+                                    'sum': sum(sorted(numbers_list))
+                                })
+                            except Exception as e:
+                                errors.append(f"第{idx+1}行: {str(e)}")
+                        
+                        if errors:
+                            for err in errors:
+                                st.error(err)
+                        elif new_draws:
+                            with st.spinner("正在保存..."):
+                                if save_draws_to_supabase(new_draws):
+                                    st.success(f"✅ 成功保存 {len(new_draws)} 期数据")
+                                    st.balloons()
+                                    st.rerun()
+                                else:
+                                    st.error("保存失败")
         
-        if edit_mode == "📄 粘贴数据添加":
-            st.markdown("格式: 期次 日期 B1 B2 B3 B4 B5 B6 B7")
-            st.code("26045 2026-04-25 4 16 21 36 42 46 9\n26044 2026-04-23 12 23 37 38 45 48 8")
+        # ========== 模式2：粘贴数据添加 ==========
+        elif admin_mode == "📄 粘贴数据添加":
+            st.markdown("""
+            **数据格式**: 每期一行，用制表符或逗号分隔
+            期次 日期 B1 B2 B3 B4 B5 B6 B7
+            **示例**: 26045 2026-04-25 4 16 21 36 42 46 9
+            """)
+            
             admin_pasted = st.text_area("粘贴历史数据", height=200, key="admin_pasted")
-            if admin_pasted and st.button("预览并保存", key="save_pasted"):
-                parsed_draws = parse_pasted_data(admin_pasted)
-                if parsed_draws:
-                    st.session_state['preview_draws'] = parsed_draws
-                    st.success(f"成功解析 {len(parsed_draws)} 期数据")
-                    preview_df = pd.DataFrame(parsed_draws[-20:])
-                    display_centered_dataframe(preview_df)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("预览数据", key="preview_pasted"):
+                    parsed_draws = parse_pasted_data(admin_pasted)
+                    if parsed_draws:
+                        st.session_state['preview_draws'] = parsed_draws
+                        st.success(f"成功解析 {len(parsed_draws)} 期数据")
+                        preview_df = pd.DataFrame(parsed_draws[-20:])
+                        display_centered_dataframe(preview_df, key="pasted_preview")
+                    else:
+                        st.error("数据解析失败")
+            
+            with col2:
+                if st.session_state.get('preview_draws') and st.button("确认保存", key="confirm_pasted"):
+                    if save_draws_to_supabase(st.session_state['preview_draws']):
+                        st.success(f"✅ 成功保存 {len(st.session_state['preview_draws'])} 期数据")
+                        st.session_state['preview_draws'] = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("保存失败")
         
-        elif edit_mode == "📎 上传Excel文件":
+        # ========== 模式3：上传Excel文件 ==========
+        elif admin_mode == "📎 上传Excel文件":
+            st.markdown("Excel文件需包含：期次、開獎日期、B1-B7列")
             admin_file = st.file_uploader("上传Excel文件", type=['xlsx', 'xls'], key="admin_file")
-            if admin_file and st.button("预览并保存", key="save_excel"):
-                parsed_draws = parse_excel_file(admin_file)
-                if parsed_draws:
-                    st.session_state['preview_draws'] = parsed_draws
-                    st.success(f"成功解析 {len(parsed_draws)} 期数据")
-                    display_centered_dataframe(pd.DataFrame(parsed_draws[-20:]))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if admin_file and st.button("预览数据", key="preview_excel"):
+                    parsed_draws = parse_excel_file(admin_file)
+                    if parsed_draws:
+                        st.session_state['preview_draws'] = parsed_draws
+                        st.success(f"成功解析 {len(parsed_draws)} 期数据")
+                        preview_df = pd.DataFrame(parsed_draws[-20:])
+                        display_centered_dataframe(preview_df, key="excel_preview")
+                    else:
+                        st.error("数据解析失败")
+            
+            with col2:
+                if st.session_state.get('preview_draws') and st.button("确认保存", key="confirm_excel"):
+                    if save_draws_to_supabase(st.session_state['preview_draws']):
+                        st.success(f"✅ 成功保存 {len(st.session_state['preview_draws'])} 期数据")
+                        st.session_state['preview_draws'] = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("保存失败")
         
-        if st.session_state.get('preview_draws') is not None:
-            parsed_draws = st.session_state['preview_draws']
-            st.markdown("---")
-            st.subheader("💾 保存到云端")
+        # ========== 模式4：清空所有数据 ==========
+        elif admin_mode == "🗑️ 清空所有数据":
+            st.warning("⚠️ 此操作将删除Supabase中的所有历史数据，不可恢复！")
             
             col1, col2 = st.columns([1, 1])
             with col1:
-                if st.button("☁️ 保存到Supabase", type="primary", key="save_parsed"):
-                    with st.spinner("正在保存..."):
-                        if save_draws_to_supabase(parsed_draws):
-                            st.success(f"成功保存 {len(parsed_draws)} 期数据到Supabase！")
-                            st.session_state['preview_draws'] = None
-                            st.balloons()
+                if st.button("确认清空", type="secondary", key="confirm_clear"):
+                    supabase = init_supabase()
+                    if supabase:
+                        try:
+                            supabase.schema('marksix_schema').table('marksix_draws').delete().neq("id", 0).execute()
+                            st.success("✅ 数据已清空")
+                            st.cache_data.clear()
                             st.rerun()
-                        else:
-                            st.error("保存失败")
+                        except Exception as e:
+                            st.error(f"清空失败: {e}")
+                    else:
+                        st.error("Supabase连接失败")
             with col2:
-                if st.button("❌ 取消", key="cancel_parsed"):
-                    st.session_state['preview_draws'] = None
+                if st.button("取消", key="cancel_clear"):
                     st.rerun()
 
 # ==================== 初始化session state ====================
