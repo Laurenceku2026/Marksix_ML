@@ -1137,8 +1137,8 @@ def parse_excel_file(uploaded_file):
 def display_centered_dataframe(df, key=None):
     st.dataframe(df, use_container_width=True, hide_index=True, key=key)
 
-# ==================== 管理员页面 ====================
 # ==================== 增强版管理员页面（带可编辑表格） ====================
+# ==================== 完整的管理员页面（包含回测模块） ====================
 def show_admin_page():
     with st.expander("🔧 管理员控制台", expanded=True):
         st.subheader("📁 历史数据管理")
@@ -1154,10 +1154,10 @@ def show_admin_page():
         
         st.markdown("---")
         
-        # 选择操作模式
+        # 选择操作模式（共5个选项）
         admin_mode = st.radio(
             "选择操作",
-            ["✏️ 直接编辑表格", "📄 粘贴数据添加", "📎 上传Excel文件", "🗑️ 清空所有数据"],
+            ["✏️ 直接编辑表格", "📄 粘贴数据添加", "📎 上传Excel文件", "🗑️ 清空所有数据", "📊 策略回测"],
             horizontal=True,
             key="admin_mode"
         )
@@ -1233,30 +1233,23 @@ def show_admin_page():
                             
                             for idx, row in edited_df.iterrows():
                                 try:
-                                    # 解析期次
                                     period = int(row['期次']) if pd.notna(row['期次']) else None
                                     if period is None:
                                         errors.append(f"第{idx+1}行: 期次不能为空")
                                         continue
                                     
-                                    # 解析日期
                                     date_val = row['開獎日期']
                                     date_str = None
                                     if pd.notna(date_val) and str(date_val).strip():
                                         date_str = str(date_val).strip()
-                                        if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
-                                            pass
-                                        else:
-                                            # 尝试多种日期格式
-                                            for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"]:
-                                                try:
-                                                    dt = datetime.strptime(date_str, fmt)
-                                                    date_str = dt.strftime("%Y-%m-%d")
-                                                    break
-                                                except:
-                                                    pass
+                                        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"]:
+                                            try:
+                                                dt = datetime.strptime(date_str, fmt)
+                                                date_str = dt.strftime("%Y-%m-%d")
+                                                break
+                                            except:
+                                                pass
                                     
-                                    # 解析正码
                                     numbers_str = str(row['正码(6个)']).strip()
                                     if not numbers_str:
                                         errors.append(f"第{idx+1}行: 正码不能为空")
@@ -1269,14 +1262,13 @@ def show_admin_page():
                                             if 1 <= num <= 49:
                                                 numbers_list.append(num)
                                             else:
-                                                errors.append(f"第{idx+1}行: 正码 {num} 超出范围(1-49)")
+                                                errors.append(f"第{idx+1}行: 正码 {num} 超出范围")
                                                 break
                                     
                                     if len(numbers_list) != 6:
                                         errors.append(f"第{idx+1}行: 正码需要6个，当前有{len(numbers_list)}个")
                                         continue
                                     
-                                    # 解析特码
                                     special = int(row['特码']) if pd.notna(row['特码']) else None
                                     if special is None or not (1 <= special <= 49):
                                         errors.append(f"第{idx+1}行: 特码必须在1-49之间")
@@ -1289,9 +1281,8 @@ def show_admin_page():
                                         'special': special,
                                         'sum': sum(sorted(numbers_list))
                                     })
-                                    
                                 except Exception as e:
-                                    errors.append(f"第{idx+1}行: 解析错误 - {str(e)}")
+                                    errors.append(f"第{idx+1}行: {str(e)}")
                             
                             if errors:
                                 for err in errors:
@@ -1299,7 +1290,7 @@ def show_admin_page():
                             elif new_draws:
                                 with st.spinner("正在保存..."):
                                     if save_draws_to_supabase(new_draws):
-                                        st.success(f"✅ 成功保存 {len(new_draws)} 期数据到Supabase！")
+                                        st.success(f"✅ 成功保存 {len(new_draws)} 期数据")
                                         st.balloons()
                                         st.rerun()
                                     else:
@@ -1314,7 +1305,6 @@ def show_admin_page():
             else:
                 st.warning("📭 云端暂无数据，请通过下方方式添加数据")
                 
-                # 创建空表格
                 st.markdown("### ➕ 创建新数据")
                 empty_df = pd.DataFrame(columns=['期次', '開獎日期', '正码(6个)', '特码', '和值'])
                 edited_df = st.data_editor(
@@ -1360,7 +1350,7 @@ def show_admin_page():
                                             break
                                 
                                 if len(numbers_list) != 6:
-                                    errors.append(f"第{idx+1}行: 正码需要6个，当前{len(numbers_list)}个")
+                                    errors.append(f"第{idx+1}行: 正码需要6个")
                                     continue
                                 
                                 special = int(row['特码']) if pd.notna(row['特码']) else None
@@ -1387,8 +1377,6 @@ def show_admin_page():
                                     st.success(f"✅ 成功保存 {len(new_draws)} 期数据")
                                     st.balloons()
                                     st.rerun()
-                                else:
-                                    st.error("保存失败")
         
         # ========== 模式2：粘贴数据添加 ==========
         elif admin_mode == "📄 粘贴数据添加":
@@ -1408,7 +1396,7 @@ def show_admin_page():
                         st.session_state['preview_draws'] = parsed_draws
                         st.success(f"成功解析 {len(parsed_draws)} 期数据")
                         preview_df = pd.DataFrame(parsed_draws[-20:])
-                        display_centered_dataframe(preview_df, key="pasted_preview")
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
                     else:
                         st.error("数据解析失败")
             
@@ -1435,7 +1423,7 @@ def show_admin_page():
                         st.session_state['preview_draws'] = parsed_draws
                         st.success(f"成功解析 {len(parsed_draws)} 期数据")
                         preview_df = pd.DataFrame(parsed_draws[-20:])
-                        display_centered_dataframe(preview_df, key="excel_preview")
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True)
                     else:
                         st.error("数据解析失败")
             
@@ -1470,6 +1458,228 @@ def show_admin_page():
             with col2:
                 if st.button("取消", key="cancel_clear"):
                     st.rerun()
+        
+        # ========== 模式5：策略回测 ==========
+        elif admin_mode == "📊 策略回测":
+            st.markdown("### 📈 策略回测")
+            st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
+            
+            draws = load_draws_from_supabase()
+            
+            if draws is None or len(draws) < 50:
+                st.warning("⚠️ 数据不足，至少需要50期数据才能进行回测")
+                return
+            
+            st.info(f"📊 当前云端有 {len(draws)} 期数据")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                test_periods = st.number_input(
+                    "测试期数", 
+                    min_value=10, 
+                    max_value=min(200, len(draws) - 50), 
+                    value=min(100, len(draws) - 50), 
+                    step=10,
+                    key="backtest_periods"
+                )
+            with col2:
+                test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
+            with col3:
+                test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
+            with col4:
+                test_method = st.selectbox(
+                    "测试方法",
+                    ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN"],
+                    index=3,
+                    key="backtest_method"
+                )
+            
+            with st.expander("⚙️ 高级选项"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    test_pattern = st.checkbox("连号/跳号要求", value=True, key="backtest_pattern")
+                with col2:
+                    test_prev_repeat = st.checkbox("上期重复要求", value=True, key="backtest_prev_repeat")
+                with col3:
+                    test_trend_window = st.number_input("趋势窗口", min_value=2, max_value=20, value=4, key="backtest_trend_window")
+            
+            if st.button("▶️ 运行回测", type="primary", key="run_backtest"):
+                with st.spinner("正在运行回测，请稍候..."):
+                    results = run_backtest(
+                        draws, test_method, test_bets, test_num_count,
+                        test_pattern, test_prev_repeat, test_trend_window,
+                        test_periods
+                    )
+                    
+                    if results is not None:
+                        display_backtest_results(results, test_bets)
+
+
+# ==================== 回测核心函数 ====================
+def run_backtest(draws, method_name, num_bets, num_count, require_pattern, require_prev_repeat, trend_window, test_periods):
+    """运行回测"""
+    if len(draws) < test_periods + 50:
+        st.error(f"数据不足：需要至少 {test_periods + 50} 期数据")
+        return None
+    
+    results = []
+    total_cost = 0
+    total_prize = 0
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i in range(test_periods):
+        train_draws = draws[:-(test_periods - i)]
+        test_draw = draws[-(test_periods - i)]
+        
+        status_text.text(f"正在回测第 {i+1}/{test_periods} 期...")
+        progress_bar.progress((i + 1) / test_periods)
+        
+        # 根据方法生成投注
+        if "方法1" in method_name:
+            bets = generate_bets_method1_current(
+                train_draws, num_bets, num_count, require_pattern, require_prev_repeat,
+                trend_window, None, 100
+            )
+        elif "方法2" in method_name:
+            bets = generate_bets_method2_hybrid(
+                train_draws, num_bets, num_count, require_pattern, require_prev_repeat,
+                trend_window, None, 100
+            )
+        elif "方法3" in method_name:
+            bets = generate_bets_method3_lightgbm(
+                train_draws, num_bets, num_count, require_pattern, require_prev_repeat,
+                trend_window, None, 100
+            )
+        else:
+            bets = generate_bets_method4_ensemble(
+                train_draws, num_bets, num_count, require_pattern, require_prev_repeat,
+                trend_window, None, 100
+            )
+        
+        # 计算每期最佳匹配和奖金
+        best_match = 0
+        best_special_match = False
+        best_prize_amount = 0
+        best_prize_desc = "无中奖"
+        
+        for bet in bets:
+            prize_amount = calculate_7code_prize(bet['numbers'], test_draw)
+            match_count = len(set(bet['numbers'][:6]) & set(test_draw['numbers']))
+            special_match = test_draw.get('special') in bet['numbers'] if test_draw.get('special') else False
+            
+            if match_count > best_match or (match_count == best_match and special_match):
+                best_match = match_count
+                best_special_match = special_match
+                best_prize_amount = prize_amount
+                if prize_amount >= 10000000:
+                    best_prize_desc = "第1组"
+                elif prize_amount >= 3000000:
+                    best_prize_desc = "第2组"
+                elif prize_amount >= 60000:
+                    best_prize_desc = "第3组"
+                elif prize_amount >= 9600:
+                    best_prize_desc = "第4组"
+                elif prize_amount >= 640:
+                    best_prize_desc = "第5组"
+                elif prize_amount >= 320:
+                    best_prize_desc = "第6组"
+                elif prize_amount >= 40:
+                    best_prize_desc = "第7组"
+        
+        total_cost += num_bets * 35
+        total_prize += best_prize_amount
+        
+        match_display = f"{best_match}+特" if best_special_match and best_match >= 3 else str(best_match) if best_match >= 3 else str(best_match)
+        
+        results.append({
+            '期次': test_draw.get('period', ''),
+            '日期': test_draw.get('date', '')[:10] if test_draw.get('date') else '',
+            '最佳匹配': match_display if best_match >= 3 else "-",
+            '中奖等级': best_prize_desc,
+            '奖金': f"${best_prize_amount:,.0f}" if best_prize_amount > 0 else "-"
+        })
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    roi = (total_prize - total_cost) / total_cost * 100 if total_cost > 0 else 0
+    results.append({
+        '期次': '📊 统计',
+        '日期': f'测试期数: {test_periods}',
+        '最佳匹配': f'总投入: ${total_cost:,.0f}',
+        '中奖等级': f'总奖金: ${total_prize:,.0f}',
+        '奖金': f'ROI: {roi:+.1f}%'
+    })
+    
+    return pd.DataFrame(results)
+
+
+def calculate_7code_prize(bet_numbers, draw):
+    """
+    计算7码复式的实际中奖金额
+    bet_numbers: 7个号码的列表
+    draw: 开奖数据，包含 numbers(6个正码) 和 special(特码)
+    """
+    draw_numbers = set(draw['numbers'])
+    draw_special = draw.get('special')
+    
+    hit_count = sum(1 for n in bet_numbers if n in draw_numbers)
+    has_special = draw_special is not None and draw_special in bet_numbers
+    
+    if hit_count == 6:
+        return 10180000
+    elif hit_count == 5 and has_special:
+        return 3060000
+    elif hit_count == 5:
+        return 61600
+    elif hit_count == 4 and has_special:
+        return 10560
+    elif hit_count == 4:
+        return 1040
+    elif hit_count == 3 and has_special:
+        return 240
+    elif hit_count == 3:
+        return 80
+    else:
+        return 0
+
+
+def display_backtest_results(results_df, num_bets):
+    """显示回测结果"""
+    st.markdown("### 📊 回测结果")
+    
+    stats_row = results_df[results_df['期次'] == '📊 统计']
+    if len(stats_row) > 0:
+        stats = stats_row.iloc[0]
+        st.info(f"**{stats['日期']} | {stats['最佳匹配']} | {stats['中奖等级']} | {stats['奖金']}**")
+        results_df = results_df[results_df['期次'] != '📊 统计']
+    
+    with st.expander("📋 查看详细回测结果"):
+        st.dataframe(results_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("### 📈 奖金分布")
+    
+    prize_counts = {'第1组': 0, '第2组': 0, '第3组': 0, '第4组': 0, '第5组': 0, '第6组': 0, '第7组': 0}
+    
+    for _, row in results_df.iterrows():
+        level = row['中奖等级']
+        if level in prize_counts:
+            prize_counts[level] += 1
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("第7组($80)", prize_counts['第7组'])
+        st.metric("第6组($240)", prize_counts['第6组'])
+    with col2:
+        st.metric("第5组($1,040)", prize_counts['第5组'])
+        st.metric("第4组($10,560)", prize_counts['第4组'])
+    with col3:
+        st.metric("第3组($61,600)", prize_counts['第3组'])
+    with col4:
+        st.metric("第2组($306万)", prize_counts['第2组'])
+        st.metric("第1组($1018万)", prize_counts['第1组'])
 
 # ==================== 初始化session state ====================
 if 'admin_logged_in' not in st.session_state:
