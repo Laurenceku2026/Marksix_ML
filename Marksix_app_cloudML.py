@@ -300,7 +300,7 @@ def calculate_six_mark_boost(num: int, last_reds: List[int], last_special: Optio
 
 # ==================== Supabase 数据操作（修复版） ====================
 def save_draws_to_supabase(draws: List[Dict]) -> bool:
-    """保存开奖数据到Supabase（覆盖保存）- 修复日期类型"""
+    """保存开奖数据到Supabase（覆盖保存）- 修复日期格式"""
     supabase = init_supabase()
     if supabase is None:
         return False
@@ -310,44 +310,47 @@ def save_draws_to_supabase(draws: List[Dict]) -> bool:
         
         # 插入新数据
         for draw in draws:
-            # 转换日期为Excel序列数
+            # 日期处理：确保是 YYYY-MM-DD 格式
             date_value = draw.get('date')
-            date_serial = None
+            date_str = None
             if date_value:
                 if isinstance(date_value, str):
-                    date_serial = date_string_to_excel_serial(date_value)
-                elif isinstance(date_value, (int, float)):
-                    date_serial = int(date_value)
+                    # 已经是字符串，提取日期部分
+                    date_str = date_value.split()[0] if ' ' in date_value else date_value[:10]
+                elif isinstance(date_value, datetime):
+                    date_str = date_value.strftime('%Y-%m-%d')
+                else:
+                    # 如果是数字，尝试转换（但不应发生）
+                    date_str = str(date_value)
             
-            # 获取期次（确保为整数）
+            # 期次处理
             period = draw.get('period')
             if isinstance(period, str) and period.isdigit():
                 period = int(period)
             
             data = {
                 "period": period if period else 0,
-                "date": date_serial,
+                "date": date_str,  # 使用字符串格式 YYYY-MM-DD
                 "numbers": draw['numbers'],
                 "special": draw.get('special', 0),
                 "sum_value": draw['sum']
             }
+            
+            print(f"保存数据: period={data['period']}, date={data['date']}, numbers={data['numbers']}, special={data['special']}")
+            
             supabase.schema('marksix_schema').table('marksix_draws').insert(data).execute()
+        
         return True
     except Exception as e:
         st.error(f"保存到Supabase失败: {e}")
         return False
 
-
 def load_draws_from_supabase() -> Optional[List[Dict]]:
-    """
-    从Supabase加载开奖数据
-    修复：按期次数字排序（解决字符串排序问题）
-    """
+    """从Supabase加载开奖数据（按期次数字排序）"""
     supabase = init_supabase()
     if supabase is None:
         return None
     try:
-        # 获取所有数据
         response = supabase.schema('marksix_schema').table('marksix_draws')\
             .select("*")\
             .execute()
@@ -357,13 +360,16 @@ def load_draws_from_supabase() -> Optional[List[Dict]]:
         
         draws = []
         for row in response.data:
-            # 转换日期（如果是整数序列数，转回字符串）
+            # 日期处理：数据库返回的可能是字符串或日期对象
             date_value = row.get('date')
             date_str = None
-            if date_value and isinstance(date_value, int):
-                date_str = excel_serial_to_date_string(date_value)
-            elif date_value and isinstance(date_value, str):
-                date_str = date_value[:10] if ' ' in date_value else date_value
+            if date_value:
+                if isinstance(date_value, str):
+                    date_str = date_value[:10] if ' ' in date_value else date_value
+                elif isinstance(date_value, datetime):
+                    date_str = date_value.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(date_value)[:10]
             
             draws.append({
                 'period': row.get('period'),
@@ -373,14 +379,13 @@ def load_draws_from_supabase() -> Optional[List[Dict]]:
                 'sum': row['sum_value']
             })
         
-        # 按期次数字排序（升序，最旧在前）
+        # 按期次数字排序
         draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
         
         return draws
     except Exception as e:
         st.error(f"从Supabase加载数据失败: {e}")
         return None
-
 
 def load_recent_draws_from_supabase(limit: int = 300) -> Optional[List[Dict]]:
     """加载最近N期数据（按期次降序取N条，再反转）"""
