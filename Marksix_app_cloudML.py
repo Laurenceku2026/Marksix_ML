@@ -638,83 +638,111 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
 
 
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
-    """解析Excel文件 - 修复：正确解析日期和排序"""
+    """解析Excel文件 - 精确列名匹配（修复版）"""
     try:
-        df = pd.read_excel(uploaded_file, sheet_name=0)
+        # 读取Excel，强制第一行为表头
+        df = pd.read_excel(uploaded_file, sheet_name=0, header=0)
         
-        # 智能列名匹配
+        # 打印列名（用于调试，在终端可见）
+        print(f"Excel列名: {df.columns.tolist()}")
+        
+        # 精确匹配列名（注意：列名可能包含空格）
         period_col = None
         date_col = None
         number_cols = []
         special_col = None
         
         for col in df.columns:
-            col_str = str(col).strip().lower()
-            if '期' in col_str or 'period' in col_str or '期次' in col_str:
+            col_str = str(col).strip()
+            
+            # 精确匹配期次列
+            if col_str == '期次':
                 period_col = col
-            elif '日期' in col_str or 'date' in col_str or '開獎日期' in col_str:
+            # 精确匹配開獎日期列
+            elif col_str == '開獎日期':
                 date_col = col
-            elif 'b1' in col_str or '正码1' in col_str or 'B1' in col_str:
-                for i in range(1, 7):
-                    target = f'b{i}' if 'b' in col_str.lower() else f'正码{i}'
-                    for c in df.columns:
-                        if str(c).strip().lower() == target:
-                            if c not in number_cols:
-                                number_cols.append(c)
-                            break
-            elif 'b7' in col_str or '特码' in col_str or 'B7' in col_str:
+            # 精确匹配正码列
+            elif col_str in ['B1', 'B2', 'B3', 'B4', 'B5', 'B6']:
+                number_cols.append(col)
+            # 精确匹配特码列
+            elif col_str == 'B7':
                 special_col = col
         
-        # 如果没找到，按位置取
-        if len(number_cols) != 6:
-            if len(df.columns) >= 8:
-                number_cols = df.columns[2:8].tolist()
-        if special_col is None and len(df.columns) >= 9:
-            special_col = df.columns[8]
+        # 如果精确匹配失败，使用位置匹配（备用方案）
+        if period_col is None and len(df.columns) > 0:
+            period_col = df.columns[0]  # A列是期次
+            st.info(f"使用位置匹配: 期次 = {period_col}")
+        
+        if date_col is None and len(df.columns) > 1:
+            date_col = df.columns[1]    # B列是開獎日期
+            st.info(f"使用位置匹配: 開獎日期 = {date_col}")
+        
+        if len(number_cols) != 6 and len(df.columns) >= 8:
+            number_cols = df.columns[2:8].tolist()  # C-H列是B1-B6
+            st.info(f"使用位置匹配: 正码列 = {[str(c) for c in number_cols]}")
+        
+        if special_col is None and len(df.columns) > 8:
+            special_col = df.columns[8]  # I列是B7
+            st.info(f"使用位置匹配: 特码 = {special_col}")
+        
+        # 验证是否成功识别
         if period_col is None:
-            period_col = df.columns[0]
+            st.error("无法识别期次列，请确保列名为'期次'")
+            return None
+        if date_col is None:
+            st.error("无法识别開獎日期列，请确保列名为'開獎日期'")
+            return None
+        if len(number_cols) != 6:
+            st.error(f"无法识别正码列，需要6列，找到{len(number_cols)}列")
+            return None
+        if special_col is None:
+            st.error("无法识别特码列，请确保列名为'B7'")
+            return None
         
         draws = []
+        error_count = 0
+        
         for idx, row in df.iterrows():
             try:
+                # 期次
                 period_val = row[period_col]
                 if pd.isna(period_val):
                     continue
+                period = int(period_val) if str(period_val).isdigit() else str(period_val)
                 
-                # 期次处理
-                if str(period_val).isdigit():
-                    period = int(period_val)
-                else:
-                    period = str(period_val)
-                
-                # 日期处理
-                date_val = row[date_col] if date_col else None
+                # 日期
+                date_val = row[date_col]
                 date_str = None
                 if pd.notna(date_val):
                     if isinstance(date_val, datetime):
                         date_str = date_val.strftime('%Y-%m-%d')
-                    elif isinstance(date_val, (int, float)):
-                        # 如果是Excel序列数，转换
-                        date_str = excel_serial_to_date_string(int(date_val))
+                    elif isinstance(date_val, str):
+                        # 提取日期部分
+                        date_str = date_val.split()[0] if ' ' in date_val else date_val[:10]
                     else:
                         date_str = str(date_val)[:10]
                 
                 # 正码
                 nums = []
-                for col in number_cols[:6]:
+                for col in number_cols:
                     val = row[col]
                     if pd.notna(val):
                         num = int(float(val))
                         if 1 <= num <= 49:
                             nums.append(num)
+                        else:
+                            raise ValueError(f"正码 {num} 超出范围1-49")
+                    else:
+                        raise ValueError("正码为空")
                 
                 if len(nums) != 6:
                     continue
                 
                 # 特码
+                special_val = row[special_col]
                 special = None
-                if special_col and pd.notna(row[special_col]):
-                    special = int(float(row[special_col]))
+                if pd.notna(special_val):
+                    special = int(float(special_val))
                     if not (1 <= special <= 49):
                         special = None
                 
@@ -726,16 +754,25 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
                     'sum': sum(nums)
                 })
             except Exception as e:
+                error_count += 1
                 continue
         
-        # 按期次数字排序（升序）
+        if error_count > 0:
+            st.warning(f"跳过 {error_count} 行无效数据")
+        
+        # 按期次数字排序
         draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
-        return draws if draws else None
+        
+        if draws:
+            st.success(f"成功解析 {len(draws)} 期数据")
+            return draws
+        else:
+            st.error("未找到有效数据")
+            return None
         
     except Exception as e:
         st.error(f"Excel解析错误: {e}")
         return None
-
 
 # ==================== 回测核心函数 ====================
 def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
