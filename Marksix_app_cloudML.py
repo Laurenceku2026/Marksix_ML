@@ -547,6 +547,7 @@ print("=" * 60)
 #   1. 数据显示按期次数字降序（最新在上）
 #   2. 保存时正确转换日期格式
 #   3. 修复Excel上传后的排序问题
+#   4. 修复parse_excel_file缩进问题
 # ============================================================
 
 # ==================== 管理员密码验证 ====================
@@ -608,7 +609,6 @@ def parse_pasted_data(text: str) -> List[Dict]:
             except (ValueError, IndexError):
                 continue
     
-    # 按期次数字排序
     draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
     return draws
 
@@ -640,6 +640,8 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
             except (ValueError, IndexError):
                 continue
     return draws
+
+
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
     """
     解析Excel文件 - 完整修复版
@@ -673,15 +675,19 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         # ========== 2. 如果精确匹配失败，使用位置匹配 ==========
         if period_col is None and len(df.columns) > 0:
             period_col = df.columns[0]
+            st.info(f"使用位置匹配: 期次列 = {period_col}")
         
         if date_col is None and len(df.columns) > 1:
             date_col = df.columns[1]
+            st.info(f"使用位置匹配: 開獎日期列 = {date_col}")
         
         if len(number_cols) != 6 and len(df.columns) >= 8:
             number_cols = df.columns[2:8].tolist()
+            st.info(f"使用位置匹配: 正码列 = {[str(c) for c in number_cols]}")
         
         if special_col is None and len(df.columns) > 8:
             special_col = df.columns[8]
+            st.info(f"使用位置匹配: 特码列 = {special_col}")
         
         # ========== 3. 验证 ==========
         if period_col is None:
@@ -804,138 +810,7 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
         import traceback
         st.code(traceback.format_exc())
         return None
-        
-        # ========== 4. 辅助函数：日期转换 ==========
-        def convert_to_date_string(value) -> Optional[str]:
-            """将各种格式的日期转换为 YYYY-MM-DD 字符串"""
-            if pd.isna(value):
-                return None
-            
-            # 已经是datetime对象
-            if isinstance(value, datetime):
-                return value.strftime('%Y-%m-%d')
-            
-            # 是字符串
-            if isinstance(value, str):
-                # 提取日期部分（去除时间）
-                date_part = value.split()[0] if ' ' in value else value
-                # 尝试解析各种格式
-                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%Y%m%d']:
-                    try:
-                        dt = datetime.strptime(date_part, fmt)
-                        return dt.strftime('%Y-%m-%d')
-                    except ValueError:
-                        continue
-                # 如果都解析失败，返回原字符串
-                return date_part[:10]
-            
-            # 是数字（Excel序列数）
-            if isinstance(value, (int, float)):
-                try:
-                    # Excel序列数转换：1900年1月1日为基准
-                    base_date = datetime(1900, 1, 1)
-                    # Excel的1900年日期系统有bug，需要减2天
-                    delta_days = int(value) - 2
-                    dt = base_date + timedelta(days=delta_days)
-                    return dt.strftime('%Y-%m-%d')
-                except:
-                    return None
-            
-            # 其他情况
-            return str(value)[:10]
-        
-        # ========== 5. 解析数据行 ==========
-        draws = []
-        error_count = 0
-        skip_count = 0
-        
-        for idx, row in df.iterrows():
-            try:
-                # ----- 期次 -----
-                period_val = row[period_col]
-                if pd.isna(period_val):
-                    skip_count += 1
-                    continue
-                
-                # 期次可能是数字或字符串
-                if isinstance(period_val, (int, float)):
-                    period = int(period_val)
-                else:
-                    period_str = str(period_val).strip()
-                    if period_str.isdigit():
-                        period = int(period_str)
-                    else:
-                        period = period_str
-                
-                # ----- 日期 -----
-                date_val = row[date_col]
-                date_str = convert_to_date_string(date_val)
-                
-                # ----- 正码 B1-B6 -----
-                nums = []
-                for col in number_cols:
-                    val = row[col]
-                    if pd.isna(val):
-                        raise ValueError(f"正码 {col} 为空")
-                    num = int(float(val))
-                    if not (1 <= num <= 49):
-                        raise ValueError(f"正码 {num} 超出范围1-49")
-                    nums.append(num)
-                
-                if len(nums) != 6:
-                    continue
-                
-                # ----- 特码 B7 -----
-                special_val = row[special_col]
-                special = None
-                if pd.notna(special_val):
-                    special = int(float(special_val))
-                    if not (1 <= special <= 49):
-                        special = None
-                
-                # ----- 添加到结果 -----
-                draws.append({
-                    'period': period,
-                    'date': date_str,
-                    'numbers': sorted(nums),
-                    'special': special,
-                    'sum': sum(nums)
-                })
-                
-            except Exception as e:
-                error_count += 1
-                continue
-        
-        # ========== 6. 显示解析结果 ==========
-        if skip_count > 0:
-            st.info(f"跳过 {skip_count} 行（期次为空）")
-        if error_count > 0:
-            st.warning(f"跳过 {error_count} 行（数据格式错误）")
-        
-        if not draws:
-            st.error("未找到有效数据")
-            return None
-        
-        # 按期次数字排序（升序，最旧在前）
-        draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
-        
-        # 显示数据范围
-        first_period = draws[0].get('period')
-        last_period = draws[-1].get('period')
-        st.success(f"✅ 成功解析 {len(draws)} 期数据 (范围: {first_period} - {last_period})")
-        
-        return draws
-        
-    except Exception as e:
-        st.error(f"Excel解析错误: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return None
-            return None
-        
-    except Exception as e:
-        st.error(f"Excel解析错误: {e}")
-        return None
+
 
 # ==================== 回测核心函数 ====================
 def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
@@ -950,21 +825,20 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     hit_count = sum(1 for n in bet_numbers if n in draw_numbers)
     has_special = draw_special is not None and draw_special in bet_numbers
     
-    # 7码复式半注奖金（基于香港六合彩）
     if hit_count == 6:
-        return 10180000  # 第1组
+        return 10180000
     elif hit_count == 5 and has_special:
-        return 3060000   # 第2组
+        return 3060000
     elif hit_count == 5:
-        return 61600     # 第3组
+        return 61600
     elif hit_count == 4 and has_special:
-        return 10560     # 第4组
+        return 10560
     elif hit_count == 4:
-        return 1040      # 第5组
+        return 1040
     elif hit_count == 3 and has_special:
-        return 240       # 第6组
+        return 240
     elif hit_count == 3:
-        return 80        # 第7组
+        return 80
     else:
         return 0
 
@@ -1005,7 +879,7 @@ def display_backtest_results(results_df: pd.DataFrame, num_bets: int):
         st.metric("第1组($1018万)", prize_counts['第1组'])
 
 
-# ==================== 管理员页面（修复版） ====================
+# ==================== 管理员页面 ====================
 def show_admin_page():
     """管理员页面 - 可编辑表格 + Excel上传 + 清空数据 + 回测面板"""
     
@@ -1023,7 +897,7 @@ def show_admin_page():
         display_draws = sorted(
             current_draws, 
             key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0, 
-            reverse=True  # 降序，最新在上
+            reverse=True
         )
         data_rows = []
         for d in display_draws:
@@ -1118,7 +992,6 @@ def show_admin_page():
                             
                             special = int(row['B7']) if pd.notna(row['B7']) else 0
                             
-                            # 验证
                             valid_numbers = all(1 <= n <= 49 for n in numbers) and len(set(numbers)) == 6
                             valid_special = 1 <= special <= 49
                             
@@ -1139,7 +1012,6 @@ def show_admin_page():
                         st.warning(f"跳过 {errors} 行无效数据")
                     
                     if new_draws:
-                        # 保存前排序
                         new_draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
                         if save_draws_to_supabase(new_draws):
                             st.session_state['draws_loaded'] = new_draws
@@ -1167,13 +1039,9 @@ def show_admin_page():
         with st.spinner("正在解析Excel文件..."):
             excel_draws = parse_excel_file(uploaded_file)
             if excel_draws and len(excel_draws) > 0:
-                # 显示数据范围
-                sorted_excel = sorted(excel_draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
-                st.success(f"✅ 成功解析 {len(excel_draws)} 期数据 (范围: {sorted_excel[0].get('period')} - {sorted_excel[-1].get('period')})")
-                
-                # 预览
+                # 预览最新10期
                 preview_data = []
-                for d in excel_draws[-10:]:  # 显示最新10期
+                for d in excel_draws[-10:]:
                     numbers = d.get('numbers', [])
                     numbers_str = ','.join(f"{n:02d}" for n in numbers)
                     preview_data.append({
@@ -1294,16 +1162,22 @@ def show_admin_page():
         else:
             seed_mode = "random"
         
-        # 这里调用回测函数，实际算法在第3部分实现
-        st.info("回测功能将在第3部分完整实现，当前为占位界面")
-        st.warning("请完成第3部分代码后，回测功能即可使用")
+        # 调用第3部分的回测函数
+        results_df = run_backtest(
+            draws, test_method, test_bets, test_num_count,
+            test_trend_window, test_periods,
+            method1_window, method1_window, method3_window, method4_window,
+            seed_mode, fixed_seed_value
+        )
+        
+        if results_df is not None:
+            display_backtest_results(results_df, test_bets)
 
 
-print("第2部分加载完成 (v7.1 - 修复排序和日期问题)")
+print("第2部分加载完成 (v7.1 - 修复版)")
 print("=" * 60)
 print("请确认第2部分代码，输入 CONFIRM 后继续第3部分")
 print("=" * 60)
-# ============================================================
 # ============================================================
 # 第3部分：5种AI算法 + 规律加权 + 可配置训练期数 + 回测实现
 # 版本：v7.1
