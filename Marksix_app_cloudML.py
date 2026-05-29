@@ -2692,66 +2692,35 @@ sum_7_values = [d.get('sum', sum(d.get('numbers', []))) for d in recent_draws]
 
 # 创建DataFrame
 sum_df = pd.DataFrame({
+    '序号': list(range(len(periods))),
     '期次': periods,
-    '和值(7码)': sum_7_values,
-    '序号': list(range(len(periods)))
+    '和值(7码)': sum_7_values
 })
 
-# 计算正弦拟合线
-next_val = None
-y_fit = []
-if len(recent_draws) >= 10:
-    recent_10_sums = sum_7_values[-10:]
-    try:
-        from scipy.optimize import curve_fit
-        def sine_func(x, A, omega, phi, C):
-            return A * np.sin(omega * x + phi) + C
-        x = np.arange(10)
-        y = np.array(recent_10_sums)
-        A_guess = (np.max(y) - np.min(y)) / 2
-        C_guess = np.mean(y)
-        omega_guess = 2 * np.pi / 6.5
-        params, _ = curve_fit(sine_func, x, y, p0=[A_guess, omega_guess, 0, C_guess], maxfev=2000)
-        A, omega, phi, C = params
-        x_pred = np.arange(11)
-        y_pred = sine_func(x_pred, A, omega, phi, C)
-        y_fit = y_pred[:-1]
-        next_val = y_pred[-1]
-    except:
-        pass
-
 # 绘制走势图
-fig = px.line(
-    sum_df, 
-    x='序号', 
-    y='和值(7码)', 
-    title=f'最近{show_periods}期和值走势',
-    labels={'序号': '期次', '和值(7码)': '和值(7码)'}
-)
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=sum_df['序号'],
+    y=sum_df['和值(7码)'],
+    mode='lines+markers',
+    name='实际和值',
+    line=dict(color='#ff6b6b', width=2),
+    marker=dict(size=6),
+    text=sum_df['期次'],
+    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>'
+))
 
-# 添加期次到悬停信息
-fig.update_traces(
-    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>',
-    text=sum_df['期次']
-)
-
-# 添加参考线
+# 添加理论均值线
 fig.add_hline(y=175, line_dash="dash", line_color="red", annotation_text="理论均值(175)")
-fig.add_hrect(y0=158, y1=192, line_width=0, fillcolor="green", opacity=0.1)
 
-# 添加正弦拟合线
-if len(y_fit) > 0:
-    fit_df = pd.DataFrame({
-        '序号': list(range(len(sum_df) - len(y_fit), len(sum_df))),
-        '拟合值': y_fit
-    })
-    fig.add_trace(go.Scatter(
-        x=fit_df['序号'],
-        y=fit_df['拟合值'],
-        mode='lines',
-        name='正弦拟合',
-        line=dict(color='#ff7f0e', width=2, dash='dot')
-    ))
+# 添加约68%区间（158-192）
+fig.add_hrect(
+    y0=158, y1=192, 
+    line_width=0, 
+    fillcolor="green", 
+    opacity=0.1, 
+    annotation_text="约68%区间"
+)
 
 # 设置X轴标签
 tick_interval = max(1, len(sum_df) // 10)
@@ -2761,36 +2730,34 @@ fig.update_xaxis(
     ticktext=sum_df['期次'][::tick_interval]
 )
 
+fig.update_layout(
+    title=f"最近{show_periods}期和值走势",
+    xaxis_title="期次",
+    yaxis_title="和值(7码)",
+    height=400,
+    hovermode='x unified'
+)
+
 st.plotly_chart(fig, use_container_width=True)
 
-# ... 后续代码保持不变（和值预测参考部分）...
+st.markdown("**📊 和值统计**")
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("理论均值", "175")
+with col2:
+    st.metric("历史均值", f"{np.mean(sum_7_values):.1f}")
+with col3:
+    current_sum = sum_7_values[-1] if sum_7_values else 175
+    st.metric("当前和值", f"{current_sum}")
 
-st.markdown("**📊 和值预测参考**")
-
-# 获取全局最新一期的和值
-latest_draw = draws[-1] if draws else None
-current_sum = latest_draw.get('sum', sum(latest_draw.get('numbers', []))) if latest_draw else 175
+st.markdown("---")
+st.markdown("**🎯 和值预测参考**")
 
 # 计算三种方法的预测范围
 mean_lower, mean_upper = get_target_sum_mean_reversion_range(draws)
 ma_lower, ma_upper = get_target_sum_moving_average_range(draws)
 sine_lower, sine_upper = get_target_sum_sine_range(draws)
 
-# 计算历史均值（基于全部数据）
-all_sum_7 = [d.get('sum', sum(d.get('numbers', []))) for d in draws]
-historical_mean = np.mean(all_sum_7) if all_sum_7 else 175
-
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("理论均值", f"175")
-with col2:
-    st.metric("历史均值", f"{historical_mean:.1f}")
-with col3:
-    st.metric("当前和值", f"{current_sum}")
-with col4:
-    st.metric("正弦预测点", f"{next_val:.0f}" if next_val else "N/A")
-
-# 显示三种方法预测范围
 col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("均值回归", f"{mean_lower}-{mean_upper}", delta="±17")
@@ -2800,22 +2767,13 @@ with col3:
     st.metric("正弦拟合", f"{sine_lower}-{sine_upper}", delta="±17")
 
 # 和值预测方法选择
-st.markdown("**🎯 和值预测方法（用于选号）**")
 sum_predict_method = st.radio(
-    "选择预测方法",
+    "选择预测方法（用于选号）",
     options=["均值回归", "移动平均(7期)", "正弦拟合"],
     index=1,
     key="sum_predict_method",
     horizontal=True
 )
-
-# 显示当前使用的方法和范围
-if sum_predict_method == "均值回归":
-    st.info(f"当前使用: 均值回归，范围 {mean_lower}-{mean_upper}")
-elif sum_predict_method == "移动平均(7期)":
-    st.info(f"当前使用: 移动平均，范围 {ma_lower}-{ma_upper}")
-else:
-    st.info(f"当前使用: 正弦拟合，范围 {sine_lower}-{sine_upper}")
 
 st.markdown("---")
 
