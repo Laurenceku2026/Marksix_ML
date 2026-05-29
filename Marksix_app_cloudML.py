@@ -1230,85 +1230,6 @@ def show_admin_page():
             st.rerun()
     
     st.markdown("---")
-    
-    # 回测面板
-    st.subheader("📊 策略回测")
-    st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
-    
-    draws = load_draws_from_supabase()
-    
-    if draws is None or len(draws) < 50:
-        st.warning("⚠️ 数据不足，至少需要50期数据才能进行回测")
-        return
-    
-    sorted_draws = sorted(draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
-    st.info(f"📊 当前云端有 {len(draws)} 期数据 (范围: {sorted_draws[0].get('period')} - {sorted_draws[-1].get('period')})")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        test_periods = st.number_input(
-            "测试期数", 
-            min_value=10, 
-            max_value=min(200, len(draws) - 50), 
-            value=min(50, len(draws) - 50), 
-            step=10,
-            key="backtest_periods"
-        )
-    with col2:
-        test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
-    with col3:
-        test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
-    with col4:
-        test_method = st.selectbox(
-            "测试方法",
-            ["方法1: 当前方法", "方法2: 胆拖混合", "方法3: LightGBM", "方法4: XGBoost+NN", "方法5: 综合模式"],
-            index=3,
-            key="backtest_method"
-        )
-    
-    with st.expander("⚙️ 高级选项"):
-        col1, col2 = st.columns(2)
-        with col1:
-            test_trend_window = st.number_input("趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
-        with col2:
-            st.markdown("**训练期数设置**")
-            method1_window = st.number_input("方法1/2冷热分析期数", min_value=30, max_value=200, value=50, step=10)
-            method3_window = st.number_input("方法3 LightGBM训练期数", min_value=50, max_value=300, value=100, step=10)
-            method4_window = st.number_input("方法4/5 XGBoost+NN训练期数", min_value=100, max_value=500, value=200, step=20)
-        
-        st.markdown("**🎲 随机种子模式**")
-        seed_mode_option = st.radio(
-            "选择种子模式",
-            options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
-            index=0,
-            key="backtest_seed_mode",
-            horizontal=True
-        )
-        
-        fixed_seed_value = 1
-        if "用户输入固定种子" in seed_mode_option:
-            fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1)
-    
-    if st.button("▶️ 运行回测", type="primary", key="run_backtest"):
-        # 映射种子模式
-        if "日期+21:15" in seed_mode_option:
-            seed_mode = "date"
-        elif "用户输入固定种子" in seed_mode_option:
-            seed_mode = "fixed"
-        else:
-            seed_mode = "random"
-        
-        # 调用第3部分的回测函数
-        results_df = run_backtest(
-            draws, test_method, test_bets, test_num_count,
-            test_trend_window, test_periods,
-            method1_window, method1_window, method3_window, method4_window,
-            seed_mode, fixed_seed_value
-        )
-        
-        if results_df is not None:
-            display_backtest_results(results_df, test_bets)
-
 
 print("第2部分加载完成 (v7.1 - 修复版)")
 print("=" * 60)
@@ -2732,6 +2653,128 @@ with st.sidebar:
         | 重号(特码) | ×1.15 |
         """)
         st.caption("基于269期历史数据验证")
+#---------------
+def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
+                                 trend_window: int, test_periods: int, train_window: int,
+                                 seed_mode: str, fixed_seed_value: int) -> Optional[Dict]:
+    """
+    单方法回测（用于5种方法对比）
+    
+    返回: {
+        "方法": display_name,
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": "26045(3,80), 26043(4,1040)..."
+    }
+    """
+    if len(draws) < train_window + test_periods:
+        return None
+    
+    method_seed_offset = {"方法1": 100, "方法2": 200, "方法3": 300, "方法4": 400, "方法5": 500}.get(method_key, 0)
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_details = []  # 存储中奖明细
+    
+    for i in range(test_periods):
+        # 训练数据：使用当期之前的数据
+        train_draws = draws[:-(test_periods - i)]
+        test_draw = draws[-(test_periods - i)]
+        test_period = test_draw.get('period', '')
+        
+        # 设置随机种子
+        if seed_mode == "date":
+            test_date = test_draw.get('date')
+            if test_date:
+                try:
+                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
+                    seed_val += method_seed_offset
+                except:
+                    seed_val = 42 + method_seed_offset + i
+            else:
+                seed_val = 42 + method_seed_offset + i
+        elif seed_mode == "fixed":
+            seed_val = fixed_seed_value + method_seed_offset
+        else:
+            seed_val = random.randint(0, 1000000) + method_seed_offset
+        
+        random.seed(seed_val)
+        np.random.seed(seed_val)
+        
+        # 根据方法生成投注
+        if method_key == "方法1":
+            bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        elif method_key == "方法2":
+            bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        elif method_key == "方法3":
+            bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        elif method_key == "方法4":
+            bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        else:
+            # 方法5: 综合模式
+            bets = generate_bets_method5_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, train_window, train_window, train_window)
+        
+        # 计算最佳匹配的奖金和中奖数
+        best_prize = 0
+        best_match_score = 0
+        
+        for bet in bets:
+            prize = calculate_7code_prize(bet['numbers'], test_draw)
+            match_count = len(set(bet['numbers'][:6]) & set(test_draw['numbers']))
+            has_special = test_draw.get('special') in bet['numbers'] if test_draw.get('special') else False
+            
+            # 中奖分数：正码数 + 0.5(特码)
+            match_score = match_count + (0.5 if has_special else 0)
+            
+            if prize > best_prize:
+                best_prize = prize
+                best_match_score = match_score
+        
+        total_cost += num_bets * 35  # 每组成本35元
+        total_prize += best_prize
+        
+        if best_prize > 0:
+            win_count += 1
+            # 根据奖金确定显示格式
+            if best_prize >= 10180000:
+                prize_desc = "1018万"
+            elif best_prize >= 3060000:
+                prize_desc = "306万"
+            elif best_prize >= 61600:
+                prize_desc = "6.16万"
+            elif best_prize >= 10560:
+                prize_desc = "1.056万"
+            else:
+                prize_desc = str(best_prize)
+            prize_details.append(f"{test_period}({best_match_score:.1f}, {prize_desc})")
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
+    
+    # 方法名称映射
+    name_map = {
+        "方法1": "方法1: 当前方法",
+        "方法2": "方法2: 胆拖混合",
+        "方法3": "方法3: LightGBM",
+        "方法4": "方法4: XGBoost+NN",
+        "方法5": "方法5: 综合模式"
+    }
+    
+    return {
+        "方法": name_map.get(method_key, method_key),
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": ", ".join(prize_details) if prize_details else "无"
+    }
     
     st.markdown("---")
     st.caption("DFSS智能选号工具 v7.1")
