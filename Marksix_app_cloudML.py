@@ -1984,7 +1984,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
     else:
         random.seed()
         np.random.seed()
-    
+    #---
     ensemble = train_xgboost_nn_ensemble(draws, lookback=ensemble_lookback)
     
     if ensemble is None:
@@ -2597,11 +2597,11 @@ with st.expander("⚙️ 高级设置"):
     st.markdown("**📊 训练期数设置**")
     col1, col2, col3 = st.columns(3)
     with col1:
-        method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="m1_window")
+        method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="m1_window")
     with col2:
         method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="m3_window")
     with col3:
-        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="m4_window")
+        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="m4_window")
 
 # 显示和值预测信息
 target_sum, tolerance, direction, direction_desc, mean_sum, std_sum, short_mean = get_dynamic_sum_range(
@@ -2785,7 +2785,7 @@ else:
             method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
             method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
             method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
-        
+                    
         with col3:
             # 计算最大可用回测期数
             max_window = max(method1_window, method3_window, method4_window)
