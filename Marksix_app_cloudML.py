@@ -2685,20 +2685,19 @@ show_periods = st.slider(
     step=10
 )
 
-# 获取最新100期数据（按时间顺序，旧到新）
+# 获取最新数据（按时间顺序，旧到新）
 recent_draws = draws[-show_periods:] if len(draws) >= show_periods else draws
-# 提取期次和7码和值
 periods = [str(d.get('period', '')) for d in recent_draws]
 sum_7_values = [d.get('sum', sum(d.get('numbers', []))) for d in recent_draws]
 
-# 创建DataFrame用于绘图
+# 创建DataFrame
 sum_df = pd.DataFrame({
     '期次': periods,
     '和值(7码)': sum_7_values,
-    '序号': list(range(len(periods)))  # 用于X轴
+    '序号': list(range(len(periods)))
 })
 
-# 计算正弦拟合线（基于最近10期）
+# 计算正弦拟合线
 next_val = None
 y_fit = []
 if len(recent_draws) >= 10:
@@ -2722,35 +2721,39 @@ if len(recent_draws) >= 10:
         pass
 
 # 绘制走势图
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=sum_df['序号'],
-    y=sum_df['和值(7码)'],
-    mode='lines+markers',
-    name='实际和值',
-    line=dict(color='#ff6b6b', width=2),
-    marker=dict(size=6),
-    text=sum_df['期次'],  # 悬停显示期次
-    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>'
-))
+fig = px.line(
+    sum_df, 
+    x='序号', 
+    y='和值(7码)', 
+    title=f'最近{show_periods}期和值走势',
+    labels={'序号': '期次', '和值(7码)': '和值(7码)'}
+)
 
-# 添加正弦拟合线
-if len(y_fit) > 0:
-    fit_x = list(range(len(sum_df) - 10, len(sum_df)))
-    fig.add_trace(go.Scatter(
-        x=fit_x,
-        y=y_fit,
-        mode='lines',
-        name='正弦拟合',
-        line=dict(color='#ff7f0e', width=2, dash='dot'),
-        hovertemplate='正弦拟合: %{y}<extra></extra>'
-    ))
+# 添加期次到悬停信息
+fig.update_traces(
+    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>',
+    text=sum_df['期次']
+)
 
 # 添加参考线
 fig.add_hline(y=175, line_dash="dash", line_color="red", annotation_text="理论均值(175)")
-fig.add_hrect(y0=158, y1=192, line_width=0, fillcolor="green", opacity=0.1, annotation_text="约68%区间")
+fig.add_hrect(y0=158, y1=192, line_width=0, fillcolor="green", opacity=0.1)
 
-# 设置X轴：显示期次标签，但只显示部分避免拥挤
+# 添加正弦拟合线
+if len(y_fit) > 0:
+    fit_df = pd.DataFrame({
+        '序号': list(range(len(sum_df) - len(y_fit), len(sum_df))),
+        '拟合值': y_fit
+    })
+    fig.add_trace(go.Scatter(
+        x=fit_df['序号'],
+        y=fit_df['拟合值'],
+        mode='lines',
+        name='正弦拟合',
+        line=dict(color='#ff7f0e', width=2, dash='dot')
+    ))
+
+# 设置X轴标签
 tick_interval = max(1, len(sum_df) // 10)
 fig.update_xaxis(
     tickmode='array',
@@ -2758,15 +2761,9 @@ fig.update_xaxis(
     ticktext=sum_df['期次'][::tick_interval]
 )
 
-fig.update_layout(
-    title=f"最近{show_periods}期和值走势",
-    xaxis_title="期次",
-    yaxis_title="和值(7码)",
-    height=450,
-    hovermode='x unified'
-)
-
 st.plotly_chart(fig, use_container_width=True)
+
+# ... 后续代码保持不变（和值预测参考部分）...
 
 st.markdown("**📊 和值预测参考**")
 
