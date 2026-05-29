@@ -896,9 +896,15 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     draw_numbers = set(draw['numbers'])
     draw_special = draw.get('special')
     
-    hit_count = sum(1 for n in bet_numbers if n in draw_numbers)
+    # 只取前6个号码计算正码匹配
+    main_numbers = bet_numbers[:6]
+    hit_count = len(set(main_numbers) & draw_numbers)
     has_special = draw_special is not None and draw_special in bet_numbers
-    print(f"  调试: bet_numbers={bet_numbers}, main_numbers={main_numbers}")
+    
+    # 调试输出
+    print(f"  调试: bet_numbers={bet_numbers}")
+    print(f"  调试: main_numbers={main_numbers}")
+    print(f"  调试: draw_numbers={draw_numbers}")
     print(f"  调试: hit_count={hit_count}, has_special={has_special}")
     
     if hit_count == 6:
