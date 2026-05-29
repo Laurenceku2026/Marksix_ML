@@ -2748,7 +2748,7 @@ else:
     st.info(f"📊 当前云端有 {total_draws_count} 期数据 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
     
     # ========== 回测参数设置 ==========
-    with st.expander("⚙️ 回测参数设置", expanded=True):
+    with st.expander("⚙️ 回测参数设置", expanded=False):
         col1, col2, col3 = st.columns(3)
         with col1:
             test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
