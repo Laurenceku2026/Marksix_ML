@@ -3095,7 +3095,7 @@ else:
                 result = run_backtest_single_method(
                     backtest_draws, method_key, test_bets, test_num_count,
                     test_trend_window, test_periods, bt_window,
-                    seed_mode, fixed_seed_value
+                    seed_mode, fixed_seed_value，
                     sum_predict_method  # 新增
                 )
                 
