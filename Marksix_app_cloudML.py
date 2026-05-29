@@ -1889,21 +1889,22 @@ def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Op
     
     return X_df, y_series
 
-
-def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 200) -> Optional[Dict]:
-    """训练XGBoost + 神经网络集成"""
+#--------------------
+def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100) -> Optional[Dict]:
+    """训练XGBoost + 神经网络集成（优化版）"""
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return None
     
     X, y = prepare_advanced_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 200:
+    if X is None or len(X) < 100:
         return None
     
     try:
+        # 优化参数：减少树数量、深度、迭代次数
         xgb_model = xgb.XGBClassifier(
-            n_estimators=150,
-            max_depth=6,
-            learning_rate=0.08,
+            n_estimators=80,      # 从150降到80
+            max_depth=4,          # 从6降到4
+            learning_rate=0.1,
             random_state=42,
             use_label_encoder=False,
             eval_metric='logloss',
@@ -1911,9 +1912,9 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 200) -> Optiona
         )
         
         nn_model = MLPClassifier(
-            hidden_layer_sizes=(64, 32, 16),
+            hidden_layer_sizes=(32, 16),  # 从3层减少到2层
             activation='relu',
-            max_iter=200,
+            max_iter=100,                  # 从200降到100
             random_state=42,
             early_stopping=True,
             validation_fraction=0.1
@@ -2248,14 +2249,13 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
 #-------------------------
 def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
                                  trend_window: int, test_periods: int, train_window: int,
-                                 seed_mode: str, fixed_seed_value: int,
-                                 shared_cache: Dict = None) -> Optional[Dict]:
+                                 seed_mode: str, fixed_seed_value: int) -> Optional[Dict]:
     """
-    单方法回测（用于5种方法对比）
+    单方法回测（双色球风格缓存）
     
     优化：
-    - 每5期重新训练一次ML模型
-    - 方法5复用方法3/4的缓存结果
+    - 每10期重新训练一次ML模型
+    - 缓存投注结果
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2267,19 +2267,16 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     win_count = 0
     prize_details = []
     
-    # ========== 缓存变量 ==========
-    cached_bets = None
-    cached_train_hash = None
-    retrain_interval = 5  # 每5期重新训练一次
+    # ========== 双色球风格缓存 ==========
+    trained_models = {}
+    retrain_interval = 10  # 每10期重新训练一次
     
-    for i in range(test_periods):
+    for idx in range(test_periods):
+        i = idx
         # 训练数据：使用当期之前的数据
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
-        
-        # 计算训练数据的哈希值（用期次范围）
-        train_hash = f"{train_draws[0]['period']}_{train_draws[-1]['period']}" if train_draws else None
         
         # 设置随机种子
         if seed_mode == "date":
@@ -2301,89 +2298,51 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         random.seed(seed_val)
         np.random.seed(seed_val)
         
-        # ========== 生成投注（支持缓存） ==========
-        need_retrain = False
+        # 每 retrain_interval 期重新训练一次
+        model_key = f"{method_key}_{i // retrain_interval}"
         
-        if method_key in ["方法1", "方法2"]:
-            # 方法1/2 很快，每期都重新生成
-            need_retrain = True
-        elif method_key in ["方法3", "方法4"]:
-            # ML方法：每5期或数据变化时重新训练
-            if i % retrain_interval == 0 or train_hash != cached_train_hash:
-                need_retrain = True
-                cached_train_hash = train_hash
-            else:
-                need_retrain = False
-        else:  # 方法5: 综合模式
-            # 方法5：复用方法3/4的缓存，不需要重新训练ML模型
-            need_retrain = False
-        
-        if method_key == "方法1":
-            bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-        elif method_key == "方法2":
-            bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-        elif method_key == "方法3":
-            if need_retrain or cached_bets is None:
+        if model_key not in trained_models:
+            if method_key == "方法1":
+                bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            elif method_key == "方法2":
+                bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            elif method_key == "方法3":
                 bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                cached_bets = bets
-            else:
-                bets = cached_bets
-        elif method_key == "方法4":
-            if need_retrain or cached_bets is None:
+            elif method_key == "方法4":
                 bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                cached_bets = bets
-            else:
-                bets = cached_bets
-        else:  # 方法5: 综合模式
-            # 方法5复用方法3/4的缓存，避免重复训练
-            if shared_cache is not None:
-                # 获取方法3的投注（使用缓存）
-                if shared_cache["method3_bets"] is None or train_hash != shared_cache["method3_train_hash"]:
-                    # 重新生成方法3
-                    bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                    shared_cache["method3_bets"] = bets3
-                    shared_cache["method3_train_hash"] = train_hash
-                else:
-                    bets3 = shared_cache["method3_bets"]
-                
-                # 获取方法4的投注（使用缓存）
-                if shared_cache["method4_bets"] is None or train_hash != shared_cache["method4_train_hash"]:
-                    bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                    shared_cache["method4_bets"] = bets4
-                    shared_cache["method4_train_hash"] = train_hash
-                else:
-                    bets4 = shared_cache["method4_bets"]
-            else:
-                # 没有共享缓存，独立生成
+            else:  # 方法5: 综合模式
+                # 方法5：分别调用方法1-4
+                bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
                 bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
                 bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                
+                # 合并所有投注，统计频率
+                all_numbers = []
+                for bet in bets1 + bets2 + bets3 + bets4:
+                    all_numbers.extend(bet['numbers'])
+                
+                from collections import Counter
+                freq_counter = Counter(all_numbers)
+                top_numbers = [num for num, _ in freq_counter.most_common(num_count)]
+                
+                # 生成多组投注
+                bets = []
+                for j in range(num_bets):
+                    nums = top_numbers.copy()
+                    if j > 0:
+                        replace_count = min(j, 2)
+                        for _ in range(replace_count):
+                            idx2 = random.randint(0, len(nums) - 1)
+                            candidates = [n for n in range(1, 50) if n not in nums]
+                            if candidates:
+                                nums[idx2] = random.choice(candidates)
+                        nums = sorted(nums)
+                    bets.append({'numbers': nums, 'sum': sum(nums)})
             
-            # 方法1和2每期生成
-            bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            
-            # 综合所有投注，取高频号码
-            all_numbers = []
-            for bet in bets1 + bets2 + bets3 + bets4:
-                all_numbers.extend(bet['numbers'])
-            
-            from collections import Counter
-            freq_counter = Counter(all_numbers)
-            top_numbers = [num for num, _ in freq_counter.most_common(num_count)]
-            
-            # 生成多组投注
-            bets = []
-            for j in range(num_bets):
-                nums = top_numbers.copy()
-                if j > 0:
-                    replace_count = min(j, 2)
-                    for _ in range(replace_count):
-                        idx = random.randint(0, len(nums) - 1)
-                        candidates = [n for n in range(1, 50) if n not in nums]
-                        if candidates:
-                            nums[idx] = random.choice(candidates)
-                    nums = sorted(nums)
-                bets.append({'numbers': nums, 'sum': sum(nums)})
+            trained_models[model_key] = bets
+        else:
+            bets = trained_models[model_key]
         
         # 计算最佳匹配的奖金和中奖数
         best_prize = 0
@@ -2819,13 +2778,13 @@ else:
         with col1:
             test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
             test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
-        
+        #-------------------------
         with col2:
             test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
             st.markdown("**训练期数设置**")
-            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
+            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
             method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
+            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
         
         with col3:
             # 计算最大可用回测期数
@@ -2870,93 +2829,81 @@ else:
     
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-        # 5种方法列表（根据复选框筛选）
-        methods = []
-        if enable_method1:
-            methods.append(("方法1: 当前方法", "方法1"))
-        if enable_method2:
-            methods.append(("方法2: 胆拖混合", "方法2"))
-        if enable_method3:
-            methods.append(("方法3: LightGBM", "方法3"))
-        if enable_method4:
-            methods.append(("方法4: XGBoost+NN", "方法4"))
-        if enable_method5:
-            methods.append(("方法5: 综合模式", "方法5"))
+    # 5种方法列表（根据复选框筛选）
+    methods = []
+    if enable_method1:
+        methods.append(("方法1: 当前方法", "方法1"))
+    if enable_method2:
+        methods.append(("方法2: 胆拖混合", "方法2"))
+    if enable_method3:
+        methods.append(("方法3: LightGBM", "方法3"))
+    if enable_method4:
+        methods.append(("方法4: XGBoost+NN", "方法4"))
+    if enable_method5:
+        methods.append(("方法5: 综合模式", "方法5"))
+    
+    if not methods:
+        st.warning("请至少选择一种回测方法")
+    else:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        if not methods:
-            st.warning("请至少选择一种回测方法")
-        else:
-            # 显示进度条
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        all_results = []
+        
+        for idx, (display_name, method_key) in enumerate(methods):
+            status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
             
-            all_results = []
+            # 根据方法选择对应的训练窗口
+            if method_key in ["方法1", "方法2"]:
+                bt_window = method1_window
+            elif method_key == "方法3":
+                bt_window = method3_window
+            else:
+                bt_window = method4_window
             
-            # 共享缓存（用于方法5复用）
-            shared_cache = {
-                "method3_bets": None,
-                "method3_train_hash": None,
-                "method4_bets": None,
-                "method4_train_hash": None
-            }
+            # 调用回测函数（不再需要 shared_cache）
+            result = run_backtest_single_method(
+                backtest_draws, method_key, test_bets, test_num_count,
+                test_trend_window, test_periods, bt_window,
+                seed_mode, fixed_seed_value
+            )
             
-            for idx, (display_name, method_key) in enumerate(methods):
-                status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
-                
-                # 根据方法选择对应的训练窗口
-                if method_key in ["方法1", "方法2"]:
-                    bt_window = method1_window
-                elif method_key == "方法3":
-                    bt_window = method3_window
-                else:
-                    bt_window = method4_window
-                
-                # 调用回测函数（传入共享缓存）
-                result = run_backtest_single_method(
-                    backtest_draws, method_key, test_bets, test_num_count,
-                    test_trend_window, test_periods, bt_window,
-                    seed_mode, fixed_seed_value,
-                    shared_cache  # 新增参数
-                )
-                
-                if result:
-                    all_results.append(result)
-                
-                progress_bar.progress((idx + 1) / len(methods))
+            if result:
+                all_results.append(result)
             
-            status_text.text("回测完成！")
-            progress_bar.empty()
+            progress_bar.progress((idx + 1) / len(methods))
+        
+        status_text.text("回测完成！")
+        progress_bar.empty()
+        
+        # 显示结果表格
+        if all_results:
+            df_results = pd.DataFrame(all_results)
             
-            # 显示结果表格
-            if all_results:
-                df_results = pd.DataFrame(all_results)
-                
-                # 格式化显示
-                st.dataframe(
-                    df_results.style.format({
-                        'ROI': '{:.1f}%',
-                        '总成本': '¥{:.0f}',
-                        '总奖金': '¥{:.0f}',
-                        '净收益': '¥{:.0f}',
-                        '中奖率': '{:.1f}%'
-                    }),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
-                    }
-                )
-                
-                # 找出最佳表现
-                best_roi = all_results[0]['ROI']
-                best_method = all_results[0]['方法']
-                for r in all_results:
-                    if r['ROI'] > best_roi:
-                        best_roi = r['ROI']
-                        best_method = r['方法']
-                
-                st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
-                st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
+            st.dataframe(
+                df_results.style.format({
+                    'ROI': '{:.1f}%',
+                    '总成本': '¥{:.0f}',
+                    '总奖金': '¥{:.0f}',
+                    '净收益': '¥{:.0f}',
+                    '中奖率': '{:.1f}%'
+                }),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
+                }
+            )
+            
+            best_roi = all_results[0]['ROI']
+            best_method = all_results[0]['方法']
+            for r in all_results:
+                if r['ROI'] > best_roi:
+                    best_roi = r['ROI']
+                    best_method = r['方法']
+            
+            st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
+            st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
 #---------------------------------
     st.markdown("---")
     st.caption("DFSS智能选号工具 v7.1")
