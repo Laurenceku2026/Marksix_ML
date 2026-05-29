@@ -2870,93 +2870,93 @@ else:
     
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-    # 5种方法列表（根据复选框筛选）
-    methods = []
-    if enable_method1:
-        methods.append(("方法1: 当前方法", "方法1"))
-    if enable_method2:
-        methods.append(("方法2: 胆拖混合", "方法2"))
-    if enable_method3:
-        methods.append(("方法3: LightGBM", "方法3"))
-    if enable_method4:
-        methods.append(("方法4: XGBoost+NN", "方法4"))
-    if enable_method5:
-        methods.append(("方法5: 综合模式", "方法5"))
-    
-    if not methods:
-        st.warning("请至少选择一种回测方法")
-    else:
-        # 显示进度条
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # 5种方法列表（根据复选框筛选）
+        methods = []
+        if enable_method1:
+            methods.append(("方法1: 当前方法", "方法1"))
+        if enable_method2:
+            methods.append(("方法2: 胆拖混合", "方法2"))
+        if enable_method3:
+            methods.append(("方法3: LightGBM", "方法3"))
+        if enable_method4:
+            methods.append(("方法4: XGBoost+NN", "方法4"))
+        if enable_method5:
+            methods.append(("方法5: 综合模式", "方法5"))
         
-        all_results = []
-        
-        # 共享缓存（用于方法5复用）
-        shared_cache = {
-            "method3_bets": None,
-            "method3_train_hash": None,
-            "method4_bets": None,
-            "method4_train_hash": None
-        }
-        
-        for idx, (display_name, method_key) in enumerate(methods):
-            status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
+        if not methods:
+            st.warning("请至少选择一种回测方法")
+        else:
+            # 显示进度条
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            # 根据方法选择对应的训练窗口
-            if method_key in ["方法1", "方法2"]:
-                bt_window = method1_window
-            elif method_key == "方法3":
-                bt_window = method3_window
-            else:
-                bt_window = method4_window
+            all_results = []
             
-            # 调用回测函数（传入共享缓存）
-            result = run_backtest_single_method(
-                backtest_draws, method_key, test_bets, test_num_count,
-                test_trend_window, test_periods, bt_window,
-                seed_mode, fixed_seed_value,
-                shared_cache  # 新增参数
-            )
+            # 共享缓存（用于方法5复用）
+            shared_cache = {
+                "method3_bets": None,
+                "method3_train_hash": None,
+                "method4_bets": None,
+                "method4_train_hash": None
+            }
             
-            if result:
-                all_results.append(result)
+            for idx, (display_name, method_key) in enumerate(methods):
+                status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
+                
+                # 根据方法选择对应的训练窗口
+                if method_key in ["方法1", "方法2"]:
+                    bt_window = method1_window
+                elif method_key == "方法3":
+                    bt_window = method3_window
+                else:
+                    bt_window = method4_window
+                
+                # 调用回测函数（传入共享缓存）
+                result = run_backtest_single_method(
+                    backtest_draws, method_key, test_bets, test_num_count,
+                    test_trend_window, test_periods, bt_window,
+                    seed_mode, fixed_seed_value,
+                    shared_cache  # 新增参数
+                )
+                
+                if result:
+                    all_results.append(result)
+                
+                progress_bar.progress((idx + 1) / len(methods))
             
-            progress_bar.progress((idx + 1) / len(methods))
-        
-        status_text.text("回测完成！")
-        progress_bar.empty()
-        
-        # 显示结果表格
-        if all_results:
-            df_results = pd.DataFrame(all_results)
+            status_text.text("回测完成！")
+            progress_bar.empty()
             
-            # 格式化显示
-            st.dataframe(
-                df_results.style.format({
-                    'ROI': '{:.1f}%',
-                    '总成本': '¥{:.0f}',
-                    '总奖金': '¥{:.0f}',
-                    '净收益': '¥{:.0f}',
-                    '中奖率': '{:.1f}%'
-                }),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
-                }
-            )
-            
-            # 找出最佳表现
-            best_roi = all_results[0]['ROI']
-            best_method = all_results[0]['方法']
-            for r in all_results:
-                if r['ROI'] > best_roi:
-                    best_roi = r['ROI']
-                    best_method = r['方法']
-            
-            st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
-            st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
+            # 显示结果表格
+            if all_results:
+                df_results = pd.DataFrame(all_results)
+                
+                # 格式化显示
+                st.dataframe(
+                    df_results.style.format({
+                        'ROI': '{:.1f}%',
+                        '总成本': '¥{:.0f}',
+                        '总奖金': '¥{:.0f}',
+                        '净收益': '¥{:.0f}',
+                        '中奖率': '{:.1f}%'
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
+                    }
+                )
+                
+                # 找出最佳表现
+                best_roi = all_results[0]['ROI']
+                best_method = all_results[0]['方法']
+                for r in all_results:
+                    if r['ROI'] > best_roi:
+                        best_roi = r['ROI']
+                        best_method = r['方法']
+                
+                st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
+                st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
 #---------------------------------
     st.markdown("---")
     st.caption("DFSS智能选号工具 v7.1")
