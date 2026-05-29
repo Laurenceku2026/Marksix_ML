@@ -901,12 +901,6 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     hit_count = len(set(main_numbers) & draw_numbers)
     has_special = draw_special is not None and draw_special in bet_numbers
     
-    # 调试输出
-    print(f"  调试: bet_numbers={bet_numbers}")
-    print(f"  调试: main_numbers={main_numbers}")
-    print(f"  调试: draw_numbers={draw_numbers}")
-    print(f"  调试: hit_count={hit_count}, has_special={has_special}")
-    
     if hit_count == 6:
         return 10180000
     elif hit_count == 5 and has_special:
@@ -2351,10 +2345,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             # 中奖分数：正码数 + 0.5(特码)
             match_score = match_count + (0.5 if has_special else 0)
 
-            # 调试：打印所有投注的匹配数和奖金
-            print(f"投注: {bet['numbers']}, 开奖正码: {test_draw['numbers']}, 特码: {test_draw.get('special')}")
-            print(f"  match_count={match_count}, has_special={has_special}, match_score={match_score}, prize={prize}")
-            
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
