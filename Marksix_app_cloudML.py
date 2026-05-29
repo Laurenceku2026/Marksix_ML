@@ -898,6 +898,8 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     
     hit_count = sum(1 for n in bet_numbers if n in draw_numbers)
     has_special = draw_special is not None and draw_special in bet_numbers
+    print(f"  调试: bet_numbers={bet_numbers}, main_numbers={main_numbers}")
+    print(f"  调试: hit_count={hit_count}, has_special={has_special}")
     
     if hit_count == 6:
         return 10180000
