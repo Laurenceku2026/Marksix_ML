@@ -514,8 +514,6 @@ def get_target_sum_by_numbers_count(num_count: int) -> int:
         return 150
     else:
         return int((1 + 49) / 2 * num_count)
-
-
 def has_consecutive_or_jump(nums: List[int]) -> bool:
     """检查是否有连号或跳号（已废弃，保留用于兼容）"""
     nums = sorted(nums)
@@ -525,7 +523,7 @@ def has_consecutive_or_jump(nums: List[int]) -> bool:
             return True
     return False
 
-
+#----------------
 def get_dynamic_sum_range(draws: List[Dict], num_count: int, window: int = 4, sigma_factor: float = 0.5) -> Tuple[int, int, str, str, float, float, float]:
     """
     动态和值预测
@@ -564,6 +562,158 @@ def get_dynamic_sum_range(draws: List[Dict], num_count: int, window: int = 4, si
     
     return int(target), tolerance, direction, direction_desc, long_term_mean, long_term_std, short_mean
 
+#--------------------
+# ==================== 移动平均和值预测（7期±17） ====================
+
+def get_target_sum_moving_average(draws: List[Dict], window: int = 7, tolerance: int = 17) -> Tuple[int, int]:
+    """
+    移动平均和值预测
+    
+    返回:
+        (中心值, 容差)
+    """
+    if len(draws) < window:
+        return 175, tolerance
+    
+    recent_sums = []
+    for draw in draws[-window:]:
+        numbers = draw.get('numbers', [])
+        if numbers:
+            recent_sums.append(sum(numbers))
+    
+    if not recent_sums:
+        return 175, tolerance
+    
+    mean_val = np.mean(recent_sums)
+    return int(mean_val), tolerance
+
+
+def get_target_sum_moving_average_range(draws: List[Dict], window: int = 7, tolerance: int = 17) -> Tuple[int, int]:
+    """移动平均和值范围预测"""
+    center, tol = get_target_sum_moving_average(draws, window, tolerance)
+    lower = max(80, center - tol)
+    upper = min(260, center + tol)
+    return lower, upper
+
+
+def generate_target_sum_by_moving_average(draws: List[Dict]) -> int:
+    """在移动平均预测范围内随机生成一个和值"""
+    lower, upper = get_target_sum_moving_average_range(draws)
+    return random.randint(lower, upper)
+
+
+# ==================== 正弦拟合和值预测（±17） ====================
+
+def sine_fit_predict_sum_marksix(recent_sums: List[int]) -> int:
+    """
+    正弦拟合预测下一期和值（六合彩专用）
+    """
+    from scipy.optimize import curve_fit
+    
+    if len(recent_sums) < 10:
+        return int(round(np.mean(recent_sums))) if recent_sums else 175
+    
+    def sine_func(x, A, omega, phi, C):
+        return A * np.sin(omega * x + phi) + C
+    
+    x = np.arange(len(recent_sums))
+    y = np.array(recent_sums)
+    
+    A_guess = (np.max(y) - np.min(y)) / 2
+    C_guess = np.mean(y)
+    omega_guess = 2 * np.pi / 6.5
+    
+    try:
+        params, _ = curve_fit(
+            sine_func, x, y,
+            p0=[A_guess, omega_guess, 0, C_guess],
+            maxfev=2000
+        )
+        A, omega, phi, C = params
+        next_val = sine_func(len(recent_sums), A, omega, phi, C)
+        return max(140, min(210, int(round(next_val))))
+    except:
+        return int(round(np.mean(recent_sums)))
+
+
+def get_target_sum_sine_range(draws: List[Dict], tolerance: int = 17) -> Tuple[int, int]:
+    """正弦拟合和值范围预测"""
+    if len(draws) < 10:
+        return 158, 192
+    
+    recent_sums = []
+    for draw in draws[-10:]:
+        numbers = draw.get('numbers', [])
+        if numbers:
+            recent_sums.append(sum(numbers))
+    
+    if len(recent_sums) < 10:
+        return 158, 192
+    
+    target = sine_fit_predict_sum_marksix(recent_sums)
+    lower = max(80, target - tolerance)
+    upper = min(260, target + tolerance)
+    
+    return lower, upper
+
+
+def generate_target_sum_by_sine(draws: List[Dict]) -> int:
+    """在正弦拟合预测范围内随机生成一个和值"""
+    lower, upper = get_target_sum_sine_range(draws)
+    return random.randint(lower, upper)
+
+
+# ==================== 修改均值回归函数的容差为±17 ====================
+
+def get_target_sum_mean_reversion(draws: List[Dict], num_count: int = 7, tolerance: int = 17) -> Tuple[int, int]:
+    """
+    均值回归和值预测（修改版，容差±17）
+    
+    返回:
+        (目标值, 容差)
+    """
+    if len(draws) < 10:
+        return 175, tolerance
+    
+    # 计算长期均值（最近100期）
+    recent_draws = draws[-100:] if len(draws) >= 100 else draws
+    all_sums = [sum(d.get('numbers', [])) for d in recent_draws]
+    long_term_mean = np.mean(all_sums) if all_sums else 175
+    long_term_std = np.std(all_sums) if len(all_sums) > 1 else 20
+    
+    # 短期均值（最近4期）
+    short_draws = draws[-4:] if len(draws) >= 4 else draws
+    short_sums = [sum(d.get('numbers', [])) for d in short_draws]
+    short_mean = np.mean(short_sums) if short_sums else long_term_mean
+    
+    # 判断方向
+    threshold = long_term_std * 0.15
+    if short_mean > long_term_mean + threshold:
+        target = int(long_term_mean - tolerance * 0.3)
+    elif short_mean < long_term_mean - threshold:
+        target = int(long_term_mean + tolerance * 0.3)
+    else:
+        target = int(long_term_mean)
+    
+    # 确保目标在合理范围内
+    target = max(140, min(210, target))
+    
+    return target, tolerance
+
+
+def get_target_sum_mean_reversion_range(draws: List[Dict], num_count: int = 7, tolerance: int = 17) -> Tuple[int, int]:
+    """均值回归和值范围预测"""
+    target, tol = get_target_sum_mean_reversion(draws, num_count, tolerance)
+    lower = max(80, target - tol)
+    upper = min(260, target + tol)
+    return lower, upper
+
+
+def generate_target_sum_by_mean_reversion(draws: List[Dict]) -> int:
+    """在均值回归预测范围内随机生成一个和值"""
+    lower, upper = get_target_sum_mean_reversion_range(draws)
+    return random.randint(lower, upper)
+#---------------------
 
 def parse_datetime_string(datetime_str: str) -> Optional[int]:
     """解析日期时间字符串为Excel序列数"""
@@ -1550,9 +1700,8 @@ def generate_bets_method2_hybrid(draws: List[Dict], num_bets: int, num_count: in
     
     # 采样权重
     weights = get_sampling_weights(enhanced_scores, temperature=1.5)
-    
-    # 和值预测
-    target_sum, tolerance, direction, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=trend_window)
+    #---------------
+    # 和值预测（使用用户选择的方法）
     base_target = get_target_sum_by_numbers_count(num_count)
     
     # 选择胆码
@@ -1565,9 +1714,8 @@ def generate_bets_method2_hybrid(draws: List[Dict], num_bets: int, num_count: in
     
     bets = []
     for i in range(num_bets):
-        offset = random.randint(-tolerance, tolerance)
-        t = int(target_sum + offset)
-        t = max(base_target - 2 * tolerance, min(base_target + 2 * tolerance, t))
+        # 每注独立生成和值目标
+        t = get_sum_target_by_method(draws, num_count, trend_window, sum_predict_method)
         
         # 生成拖码
         remaining_needed = num_count - len(anchors)
@@ -2249,7 +2397,8 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
 #-------------------------
 def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
                                  trend_window: int, test_periods: int, train_window: int,
-                                 seed_mode: str, fixed_seed_value: int) -> Optional[Dict]:
+                                 seed_mode: str, fixed_seed_value: int,
+                                 sum_predict_method: str = "移动平均(7期)") -> Optional[Dict]:
     """
     单方法回测（双色球风格缓存）
     
@@ -2303,19 +2452,19 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         
         if model_key not in trained_models:
             if method_key == "方法1":
-                bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
             elif method_key == "方法2":
-                bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
             elif method_key == "方法3":
-                bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
             elif method_key == "方法4":
-                bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
             else:  # 方法5: 综合模式
-                # 方法5：分别调用方法1-4
-                bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-                bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                # 方法5：分别调用方法1-4（传入 sum_predict_method）
+                bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
+                bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
+                bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
+                bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method))
                 
                 # 合并所有投注，统计频率
                 all_numbers = []
@@ -2557,10 +2706,83 @@ recent_sum_draws = draws[-show_periods:] if len(draws) >= show_periods else draw
 sum_7_values = [convert_6sum_to_7sum(draw['sum']) for draw in recent_sum_draws]
 sum_df = pd.DataFrame([{'期次': i+1, '和值(7码)': val} for i, val in enumerate(sum_7_values)])
 
+# 计算正弦拟合线（用于走势图）
+next_val = 175
+y_fit = []
+if len(recent_sum_draws) >= 10:
+    recent_sums = [convert_6sum_to_7sum(d['sum']) for d in recent_sum_draws[-10:]]
+    try:
+        from scipy.optimize import curve_fit
+        def sine_func(x, A, omega, phi, C):
+            return A * np.sin(omega * x + phi) + C
+        x = np.arange(len(recent_sums))
+        y = np.array(recent_sums)
+        A_guess = (np.max(y) - np.min(y)) / 2
+        C_guess = np.mean(y)
+        omega_guess = 2 * np.pi / 6.5
+        params, _ = curve_fit(sine_func, x, y, p0=[A_guess, omega_guess, 0, C_guess], maxfev=2000)
+        A, omega, phi, C = params
+        x_pred = np.arange(len(recent_sums) + 1)
+        y_pred = sine_func(x_pred, A, omega, phi, C)
+        y_fit = y_pred[:-1]
+        next_val = y_pred[-1]
+    except:
+        pass
+
+# 绘制和值走势图
 fig = px.line(sum_df, x='期次', y='和值(7码)', title=f'最近{show_periods}期和值走势')
 fig.add_hline(y=175, line_dash="dash", line_color="red", annotation_text="理论均值(175)")
-fig.add_hrect(y0=140, y1=210, line_width=0, fillcolor="green", opacity=0.1, annotation_text="约68%区间")
+fig.add_hrect(y0=158, y1=192, line_width=0, fillcolor="green", opacity=0.1, annotation_text="约68%区间")
+if len(y_fit) > 0:
+    fig.add_trace(go.Scatter(x=list(range(len(y_fit))), y=y_fit, mode='lines', name='正弦拟合', line=dict(color='orange', width=2, dash='dot')))
 st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("**📊 和值预测参考**")
+
+# 计算三种方法的预测范围
+mean_lower, mean_upper = get_target_sum_mean_reversion_range(draws)
+ma_lower, ma_upper = get_target_sum_moving_average_range(draws)
+sine_lower, sine_upper = get_target_sum_sine_range(draws)
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("理论均值", f"175")
+with col2:
+    st.metric("历史均值", f"{np.mean(sum_7_values):.1f}")
+with col3:
+    current_sum = sum_7_values[-1] if sum_7_values else 175
+    st.metric("当前和值", f"{current_sum}")
+with col4:
+    st.metric("正弦预测点", f"{next_val:.0f}" if isinstance(next_val, (int, float)) else "N/A")
+
+# 显示三种方法预测范围
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("均值回归", f"{mean_lower}-{mean_upper}", delta="±17")
+with col2:
+    st.metric("移动平均(7期)", f"{ma_lower}-{ma_upper}", delta="±17")
+with col3:
+    st.metric("正弦拟合", f"{sine_lower}-{sine_upper}", delta="±17")
+
+# 和值预测方法选择
+st.markdown("**🎯 和值预测方法（用于选号）**")
+sum_predict_method = st.radio(
+    "选择预测方法",
+    options=["均值回归", "移动平均(7期)", "正弦拟合"],
+    index=1,  # 默认移动平均
+    key="sum_predict_method",
+    horizontal=True
+)
+
+# 显示当前使用的方法和范围
+if sum_predict_method == "均值回归":
+    st.info(f"当前使用: 均值回归，范围 {mean_lower}-{mean_upper}")
+elif sum_predict_method == "移动平均(7期)":
+    st.info(f"当前使用: 移动平均，范围 {ma_lower}-{ma_upper}")
+else:
+    st.info(f"当前使用: 正弦拟合，范围 {sine_lower}-{sine_upper}")
+
+st.markdown("---")
 
 # ==================== 智能投注生成 ====================
 st.subheader("🎲 智能投注生成")
@@ -2604,11 +2826,19 @@ with st.expander("⚙️ 高级设置"):
         method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="m4_window")
 
 # 显示和值预测信息
-target_sum, tolerance, direction, direction_desc, mean_sum, std_sum, short_mean = get_dynamic_sum_range(
-    draws, num_count, window=trend_window
-)
-st.caption(f"💡 **和值动态预测**: 长期均值={mean_sum:.1f}, σ={std_sum:.1f} | {direction_desc} | 目标={target_sum} | 容差=±{tolerance}")
+# 根据用户选择的预测方法获取和值范围
+if sum_predict_method == "均值回归":
+    sum_lower, sum_upper = get_target_sum_mean_reversion_range(draws)
+    sum_method_name = "均值回归"
+elif sum_predict_method == "移动平均(7期)":
+    sum_lower, sum_upper = get_target_sum_moving_average_range(draws)
+    sum_method_name = "移动平均(7期)"
+else:
+    sum_lower, sum_upper = get_target_sum_sine_range(draws)
+    sum_method_name = "正弦拟合"
 
+st.caption(f"💡 **和值预测 ({sum_method_name})**: 范围 {sum_lower}-{sum_upper}")
+#------------------
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     # 解析随机种子
     random_seed = None
@@ -2866,6 +3096,7 @@ else:
                     backtest_draws, method_key, test_bets, test_num_count,
                     test_trend_window, test_periods, bt_window,
                     seed_mode, fixed_seed_value
+                    sum_predict_method  # 新增
                 )
                 
                 if result:
