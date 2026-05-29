@@ -2799,50 +2799,50 @@ else:
     
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
-    st.markdown("**📊 回测方法选择**")
-    col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(5)
-    with col_method1:
-        enable_method1 = st.checkbox("方法1", value=True, key="bt_enable_method1")
-    with col_method2:
-        enable_method2 = st.checkbox("方法2", value=True, key="bt_enable_method2")
-    with col_method3:
-        enable_method3 = st.checkbox("方法3", value=True, key="bt_enable_method3")
-    with col_method4:
-        enable_method4 = st.checkbox("方法4", value=True, key="bt_enable_method4")
-    with col_method5:
-        enable_method5 = st.checkbox("方法5", value=True, key="bt_enable_method5")
-    
-    st.markdown("---")
-    st.markdown("**📈 回测参数**")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
-        test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
-    
-    with col2:
-        test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
-        st.markdown("**训练期数设置**")
-        method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
-        method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
-    
-    with col3:
-        # 计算最大可用回测期数
-        max_window = max(method1_window, method3_window, method4_window)
-        max_backtest_periods = total_draws_count - max_window
-        if max_backtest_periods < 1:
-            st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
-            st.stop()
+        st.markdown("**📊 回测方法选择**")
+        col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(5)
+        with col_method1:
+            enable_method1 = st.checkbox("方法1", value=True, key="bt_enable_method1")
+        with col_method2:
+            enable_method2 = st.checkbox("方法2", value=True, key="bt_enable_method2")
+        with col_method3:
+            enable_method3 = st.checkbox("方法3", value=True, key="bt_enable_method3")
+        with col_method4:
+            enable_method4 = st.checkbox("方法4", value=True, key="bt_enable_method4")
+        with col_method5:
+            enable_method5 = st.checkbox("方法5", value=True, key="bt_enable_method5")
         
-        test_periods = st.number_input(
-            "回测期数", 
-            min_value=1, 
-            max_value=max_backtest_periods, 
-            value=min(10, max_backtest_periods), 
-            key="backtest_periods"
-        )
-        st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
+        st.markdown("---")
+        st.markdown("**📈 回测参数**")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
+            test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
+        
+        with col2:
+            test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
+            st.markdown("**训练期数设置**")
+            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
+            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
+        
+        with col3:
+            # 计算最大可用回测期数
+            max_window = max(method1_window, method3_window, method4_window)
+            max_backtest_periods = total_draws_count - max_window
+            if max_backtest_periods < 1:
+                st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
+                st.stop()
+            
+            test_periods = st.number_input(
+                "回测期数", 
+                min_value=1, 
+                max_value=max_backtest_periods, 
+                value=min(10, max_backtest_periods), 
+                key="backtest_periods"
+            )
+            st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
     
     st.markdown("---")
     st.markdown("**🎲 随机种子模式**")
