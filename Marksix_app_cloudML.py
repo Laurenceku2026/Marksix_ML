@@ -2588,71 +2588,6 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
             st.warning("请先生成投注组合")
     else:
         st.error("解析失败，请检查格式")
-
-# ==================== 底部 ====================
-st.markdown("---")
-st.caption("⚠️ 本工具仅供学术研究和娱乐参考。六合彩本质上是一种随机游戏，长期期望值为负，请理性投注。")
-
-# ==================== 侧边栏 ====================
-with st.sidebar:
-    st.markdown("### 🎰 六合彩AI分析工具 v7.1")
-    st.markdown("---")
-    
-    with st.expander("🤖 ML库状态", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            if LGB_AVAILABLE:
-                st.success("✅ LightGBM")
-            else:
-                st.error("❌ LightGBM")
-            if XGB_AVAILABLE:
-                st.success("✅ XGBoost")
-            else:
-                st.error("❌ XGBoost")
-        with col2:
-            if SKLEARN_AVAILABLE:
-                st.success("✅ scikit-learn")
-            else:
-                st.error("❌ scikit-learn")
-    
-    with st.expander("📖 五种AI算法对比"):
-        st.markdown("""
-        | 算法 | 核心原理 | 规律加权 |
-        |------|---------|---------|
-        | 🟢 方法1 | 冷热码+和值 | ✅ 已集成 |
-        | 🟡 方法2 | 胆拖混合 | ✅ 已集成 |
-        | 🔵 方法3 | LightGBM | 规律特征 |
-        | 🟣 方法4 | XGBoost+NN | 规律特征 |
-        | 🌟 方法5 | 综合投票 | ✅ 已集成 |
-        """)
-    
-    with st.expander("💰 奖金结构（7码复式半注）"):
-        st.markdown("""
-        | 等级 | 条件 | 总奖金 |
-        |------|------|--------|
-        | 第7组 | 中3码 | $80 |
-        | 第6组 | 中3+特 | $240 |
-        | 第5组 | 中4码 | $1,040 |
-        | 第4组 | 中4+特 | $10,560 |
-        | 第3组 | 中5码 | ~$61,600 |
-        | 第2组 | 中5+特 | ~$3,060,000 |
-        | 第1组 | 中6码 | ~$10,180,000 |
-        """)
-    
-    with st.expander("📐 规律加权说明"):
-        st.markdown("""
-        | 规律 | 加权系数 |
-        |------|---------|
-        | 边号(正码) | ×1.3 |
-        | 边号(特码) | ×1.2 |
-        | 夹号-间隔2 | ×2.5 |
-        | 夹号-间隔3 | ×1.8 |
-        | 夹号-间隔4 | ×1.3 |
-        | 连号-2连 | ×1.2 |
-        | 连号-3连+ | ×1.5 |
-        | 重号(特码) | ×1.15 |
-        """)
-        st.caption("基于269期历史数据验证")
 #---------------
 def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
                                  trend_window: int, test_periods: int, train_window: int,
@@ -2781,6 +2716,71 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     st.caption("更新: 2026-05-13")
     st.caption("修复: 数据排序 | 日期格式 | 回测完整实现")
 
+# ==================== 底部 ====================
+st.markdown("---")
+st.caption("⚠️ 本工具仅供学术研究和娱乐参考。六合彩本质上是一种随机游戏，长期期望值为负，请理性投注。")
+
+# ==================== 侧边栏 ====================
+with st.sidebar:
+    st.markdown("### 🎰 六合彩AI分析工具 v7.1")
+    st.markdown("---")
+    
+    with st.expander("🤖 ML库状态", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            if LGB_AVAILABLE:
+                st.success("✅ LightGBM")
+            else:
+                st.error("❌ LightGBM")
+            if XGB_AVAILABLE:
+                st.success("✅ XGBoost")
+            else:
+                st.error("❌ XGBoost")
+        with col2:
+            if SKLEARN_AVAILABLE:
+                st.success("✅ scikit-learn")
+            else:
+                st.error("❌ scikit-learn")
+    
+    with st.expander("📖 五种AI算法对比"):
+        st.markdown("""
+        | 算法 | 核心原理 | 规律加权 |
+        |------|---------|---------|
+        | 🟢 方法1 | 冷热码+和值 | ✅ 已集成 |
+        | 🟡 方法2 | 胆拖混合 | ✅ 已集成 |
+        | 🔵 方法3 | LightGBM | 规律特征 |
+        | 🟣 方法4 | XGBoost+NN | 规律特征 |
+        | 🌟 方法5 | 综合投票 | ✅ 已集成 |
+        """)
+    
+    with st.expander("💰 奖金结构（7码复式半注）"):
+        st.markdown("""
+        | 等级 | 条件 | 总奖金 |
+        |------|------|--------|
+        | 第7组 | 中3码 | $80 |
+        | 第6组 | 中3+特 | $240 |
+        | 第5组 | 中4码 | $1,040 |
+        | 第4组 | 中4+特 | $10,560 |
+        | 第3组 | 中5码 | ~$61,600 |
+        | 第2组 | 中5+特 | ~$3,060,000 |
+        | 第1组 | 中6码 | ~$10,180,000 |
+        """)
+    
+    with st.expander("📐 规律加权说明"):
+        st.markdown("""
+        | 规律 | 加权系数 |
+        |------|---------|
+        | 边号(正码) | ×1.3 |
+        | 边号(特码) | ×1.2 |
+        | 夹号-间隔2 | ×2.5 |
+        | 夹号-间隔3 | ×1.8 |
+        | 夹号-间隔4 | ×1.3 |
+        | 连号-2连 | ×1.2 |
+        | 连号-3连+ | ×1.5 |
+        | 重号(特码) | ×1.15 |
+        """)
+        st.caption("基于269期历史数据验证")
+#---------------
 
 print("第4部分加载完成 (v7.1 - 修复版)")
 print("=" * 60)
