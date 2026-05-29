@@ -2248,11 +2248,14 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
 #-------------------------
 def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
                                  trend_window: int, test_periods: int, train_window: int,
-                                 seed_mode: str, fixed_seed_value: int) -> Optional[Dict]:
+                                 seed_mode: str, fixed_seed_value: int,
+                                 shared_cache: Dict = None) -> Optional[Dict]:
     """
     单方法回测（用于5种方法对比）
     
-    优化：每5期重新训练一次ML模型，大幅提升回测速度
+    优化：
+    - 每5期重新训练一次ML模型
+    - 方法5复用方法3/4的缓存结果
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2266,7 +2269,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     
     # ========== 缓存变量 ==========
     cached_bets = None
-    cached_train_end_period = None
+    cached_train_hash = None
     retrain_interval = 5  # 每5期重新训练一次
     
     for i in range(test_periods):
@@ -2275,8 +2278,8 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
         
-        # 获取训练数据的最后一期期次（用于判断是否需要重新训练）
-        train_end_period = train_draws[-1].get('period') if train_draws else None
+        # 计算训练数据的哈希值（用期次范围）
+        train_hash = f"{train_draws[0]['period']}_{train_draws[-1]['period']}" if train_draws else None
         
         # 设置随机种子
         if seed_mode == "date":
@@ -2298,40 +2301,89 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         random.seed(seed_val)
         np.random.seed(seed_val)
         
-        # ========== 判断是否需要重新生成投注 ==========
+        # ========== 生成投注（支持缓存） ==========
         need_retrain = False
         
         if method_key in ["方法1", "方法2"]:
             # 方法1/2 很快，每期都重新生成
             need_retrain = True
-        elif method_key in ["方法3", "方法4", "方法5"]:
+        elif method_key in ["方法3", "方法4"]:
             # ML方法：每5期或数据变化时重新训练
-            if i % retrain_interval == 0 or train_end_period != cached_train_end_period:
+            if i % retrain_interval == 0 or train_hash != cached_train_hash:
                 need_retrain = True
-                cached_train_end_period = train_end_period
+                cached_train_hash = train_hash
             else:
                 need_retrain = False
+        else:  # 方法5: 综合模式
+            # 方法5：复用方法3/4的缓存，不需要重新训练ML模型
+            need_retrain = False
         
-        # 生成投注
-        if need_retrain or cached_bets is None:
-            if method_key == "方法1":
-                bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            elif method_key == "方法2":
-                bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            elif method_key == "方法3":
+        if method_key == "方法1":
+            bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        elif method_key == "方法2":
+            bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        elif method_key == "方法3":
+            if need_retrain or cached_bets is None:
                 bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            elif method_key == "方法4":
-                bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-            else:
-                # 方法5: 综合模式
-                bets = generate_bets_method5_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, train_window, train_window, train_window)
-            
-            # 缓存投注结果（仅对ML方法）
-            if method_key in ["方法3", "方法4", "方法5"]:
                 cached_bets = bets
-        else:
-            # 使用缓存的投注
-            bets = cached_bets
+            else:
+                bets = cached_bets
+        elif method_key == "方法4":
+            if need_retrain or cached_bets is None:
+                bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                cached_bets = bets
+            else:
+                bets = cached_bets
+        else:  # 方法5: 综合模式
+            # 方法5复用方法3/4的缓存，避免重复训练
+            if shared_cache is not None:
+                # 获取方法3的投注（使用缓存）
+                if shared_cache["method3_bets"] is None or train_hash != shared_cache["method3_train_hash"]:
+                    # 重新生成方法3
+                    bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                    shared_cache["method3_bets"] = bets3
+                    shared_cache["method3_train_hash"] = train_hash
+                else:
+                    bets3 = shared_cache["method3_bets"]
+                
+                # 获取方法4的投注（使用缓存）
+                if shared_cache["method4_bets"] is None or train_hash != shared_cache["method4_train_hash"]:
+                    bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                    shared_cache["method4_bets"] = bets4
+                    shared_cache["method4_train_hash"] = train_hash
+                else:
+                    bets4 = shared_cache["method4_bets"]
+            else:
+                # 没有共享缓存，独立生成
+                bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+                bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            
+            # 方法1和2每期生成
+            bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            
+            # 综合所有投注，取高频号码
+            all_numbers = []
+            for bet in bets1 + bets2 + bets3 + bets4:
+                all_numbers.extend(bet['numbers'])
+            
+            from collections import Counter
+            freq_counter = Counter(all_numbers)
+            top_numbers = [num for num, _ in freq_counter.most_common(num_count)]
+            
+            # 生成多组投注
+            bets = []
+            for j in range(num_bets):
+                nums = top_numbers.copy()
+                if j > 0:
+                    replace_count = min(j, 2)
+                    for _ in range(replace_count):
+                        idx = random.randint(0, len(nums) - 1)
+                        candidates = [n for n in range(1, 50) if n not in nums]
+                        if candidates:
+                            nums[idx] = random.choice(candidates)
+                    nums = sorted(nums)
+                bets.append({'numbers': nums, 'sum': sum(nums)})
         
         # 计算最佳匹配的奖金和中奖数
         best_prize = 0
@@ -2341,10 +2393,8 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             prize = calculate_7code_prize(bet['numbers'], test_draw)
             match_count = len(set(bet['numbers'][:6]) & set(test_draw['numbers']))
             has_special = test_draw.get('special') in bet['numbers'] if test_draw.get('special') else False
-            
-            # 中奖分数：正码数 + 0.5(特码)
             match_score = match_count + (0.5 if has_special else 0)
-
+            
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
@@ -2749,51 +2799,66 @@ else:
     
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
-            test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
+    st.markdown("**📊 回测方法选择**")
+    col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(5)
+    with col_method1:
+        enable_method1 = st.checkbox("方法1", value=True, key="bt_enable_method1")
+    with col_method2:
+        enable_method2 = st.checkbox("方法2", value=True, key="bt_enable_method2")
+    with col_method3:
+        enable_method3 = st.checkbox("方法3", value=True, key="bt_enable_method3")
+    with col_method4:
+        enable_method4 = st.checkbox("方法4", value=True, key="bt_enable_method4")
+    with col_method5:
+        enable_method5 = st.checkbox("方法5", value=True, key="bt_enable_method5")
+    
+    st.markdown("---")
+    st.markdown("**📈 回测参数**")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
+        test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
+    
+    with col2:
+        test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
+        st.markdown("**训练期数设置**")
+        method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
+        method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
+    
+    with col3:
+        # 计算最大可用回测期数
+        max_window = max(method1_window, method3_window, method4_window)
+        max_backtest_periods = total_draws_count - max_window
+        if max_backtest_periods < 1:
+            st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
+            st.stop()
         
-        with col2:
-            test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
-            st.markdown("**训练期数设置**")
-            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
-            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
-        
-        with col3:
-            # 计算最大可用回测期数
-            max_window = max(method1_window, method3_window, method4_window)
-            max_backtest_periods = total_draws_count - max_window
-            if max_backtest_periods < 1:
-                st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
-                st.stop()
-            
-            test_periods = st.number_input(
-                "回测期数", 
-                min_value=1, 
-                max_value=max_backtest_periods, 
-                value=min(50, max_backtest_periods), 
-                step=5,
-                key="backtest_periods"
-            )
-            st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
-        
-        st.markdown("---")
-        st.markdown("**🎲 随机种子模式**")
-        col_seed1, col_seed2 = st.columns(2)
-        with col_seed1:
-            seed_mode_option = st.radio(
-                "选择种子模式",
-                options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
-                index=0,
-                key="backtest_seed_mode",
-                horizontal=False
-            )
-        with col_seed2:
-            fixed_seed_value = 1
-            if "用户输入固定种子" in seed_mode_option:
-                fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1, key="bt_fixed_seed")
+        test_periods = st.number_input(
+            "回测期数", 
+            min_value=1, 
+            max_value=max_backtest_periods, 
+            value=min(10, max_backtest_periods), 
+            key="backtest_periods"
+        )
+        st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
+    
+    st.markdown("---")
+    st.markdown("**🎲 随机种子模式**")
+    col_seed1, col_seed2 = st.columns(2)
+    with col_seed1:
+        seed_mode_option = st.radio(
+            "选择种子模式",
+            options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
+            index=0,
+            key="backtest_seed_mode",
+            horizontal=False
+        )
+    with col_seed2:
+        fixed_seed_value = 1
+        if "用户输入固定种子" in seed_mode_option:
+            fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1, key="bt_fixed_seed")
     
     # 映射种子模式
     if "日期+21:15" in seed_mode_option:
@@ -2805,20 +2870,35 @@ else:
     
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-        # 5种方法列表
-        methods = [
-            ("方法1: 当前方法", "方法1"),
-            ("方法2: 胆拖混合", "方法2"),
-            ("方法3: LightGBM", "方法3"),
-            ("方法4: XGBoost+NN", "方法4"),
-            ("方法5: 综合模式", "方法5")
-        ]
-        
+    # 5种方法列表（根据复选框筛选）
+    methods = []
+    if enable_method1:
+        methods.append(("方法1: 当前方法", "方法1"))
+    if enable_method2:
+        methods.append(("方法2: 胆拖混合", "方法2"))
+    if enable_method3:
+        methods.append(("方法3: LightGBM", "方法3"))
+    if enable_method4:
+        methods.append(("方法4: XGBoost+NN", "方法4"))
+    if enable_method5:
+        methods.append(("方法5: 综合模式", "方法5"))
+    
+    if not methods:
+        st.warning("请至少选择一种回测方法")
+    else:
         # 显示进度条
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         all_results = []
+        
+        # 共享缓存（用于方法5复用）
+        shared_cache = {
+            "method3_bets": None,
+            "method3_train_hash": None,
+            "method4_bets": None,
+            "method4_train_hash": None
+        }
         
         for idx, (display_name, method_key) in enumerate(methods):
             status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
@@ -2831,11 +2911,12 @@ else:
             else:
                 bt_window = method4_window
             
-            # 调用回测函数
+            # 调用回测函数（传入共享缓存）
             result = run_backtest_single_method(
                 backtest_draws, method_key, test_bets, test_num_count,
                 test_trend_window, test_periods, bt_window,
-                seed_mode, fixed_seed_value
+                seed_mode, fixed_seed_value,
+                shared_cache  # 新增参数
             )
             
             if result:
@@ -2867,9 +2948,8 @@ else:
             )
             
             # 找出最佳表现
-            best_row = all_results[0]
-            best_roi = best_row['ROI']
-            best_method = best_row['方法']
+            best_roi = all_results[0]['ROI']
+            best_method = all_results[0]['方法']
             for r in all_results:
                 if r['ROI'] > best_roi:
                     best_roi = r['ROI']
