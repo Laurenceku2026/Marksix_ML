@@ -300,7 +300,7 @@ def calculate_six_mark_boost(num: int, last_reds: List[int], last_special: Optio
 
 # ==================== Supabase 数据操作（修复版） ====================
 def save_draws_to_supabase(draws: List[Dict]) -> bool:
-    """保存开奖数据到Supabase（覆盖保存）- 修复日期格式"""
+    """保存开奖数据到Supabase（覆盖保存）- 保存7码和值"""
     supabase = init_supabase()
     if supabase is None:
         return False
@@ -308,36 +308,18 @@ def save_draws_to_supabase(draws: List[Dict]) -> bool:
         # 清空现有数据
         supabase.schema('marksix_schema').table('marksix_draws').delete().neq("id", 0).execute()
         
-        # 插入新数据
         for draw in draws:
-            # 日期处理：确保是 YYYY-MM-DD 格式
-            date_value = draw.get('date')
-            date_str = None
-            if date_value:
-                if isinstance(date_value, str):
-                    # 已经是字符串，提取日期部分
-                    date_str = date_value.split()[0] if ' ' in date_value else date_value[:10]
-                elif isinstance(date_value, datetime):
-                    date_str = date_value.strftime('%Y-%m-%d')
-                else:
-                    # 如果是数字，尝试转换（但不应发生）
-                    date_str = str(date_value)
-            
-            # 期次处理
-            period = draw.get('period')
-            if isinstance(period, str) and period.isdigit():
-                period = int(period)
+            numbers = draw['numbers']
+            sum_7 = sum(numbers)  # 7码和值
             
             data = {
-                "period": period if period else 0,
-                "date": date_str,  # 使用字符串格式 YYYY-MM-DD
-                "numbers": draw['numbers'],
+                "period": draw.get('period'),
+                "date": draw.get('date'),
+                "numbers": numbers,
                 "special": draw.get('special', 0),
-                "sum_value": draw['sum']
+                "sum_value": sum_7,  # 也存入 sum_value 保持兼容
+                "sum_7": sum_7       # 新增 sum_7 字段
             }
-            
-            print(f"保存数据: period={data['period']}, date={data['date']}, numbers={data['numbers']}, special={data['special']}")
-            
             supabase.schema('marksix_schema').table('marksix_draws').insert(data).execute()
         
         return True
@@ -403,7 +385,8 @@ def incremental_sync_draws(draws: List[Dict]) -> Dict:
                 "date": draw.get('date'),
                 "numbers": numbers,
                 "special": draw.get('special', 0),
-                "sum_value": draw.get('sum', sum(numbers))
+                "sum_value": sum(numbers),  # 7码和值
+                "sum_7": sum(numbers)       # 新增 sum_7 字段
             })
         
         # 使用 upsert 批量操作
@@ -460,14 +443,13 @@ def load_draws_from_supabase() -> Optional[List[Dict]]:
     except Exception as e:
         st.error(f"从Supabase加载数据失败: {e}")
         return None
-
-def load_recent_draws_from_supabase(limit: int = 300) -> Optional[List[Dict]]:
+#------
+def load_recent_draws_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
     """加载最近N期数据（按期次降序取N条，再反转）"""
     supabase = init_supabase()
     if supabase is None:
         return None
     try:
-        # 按期次降序取N条
         response = supabase.schema('marksix_schema').table('marksix_draws')\
             .select("*")\
             .order("period", desc=True)\
@@ -478,20 +460,18 @@ def load_recent_draws_from_supabase(limit: int = 300) -> Optional[List[Dict]]:
             return None
         
         draws = []
-        for row in reversed(response.data):  # 反转回升序
-            date_value = row.get('date')
-            date_str = None
-            if date_value and isinstance(date_value, int):
-                date_str = excel_serial_to_date_string(date_value)
-            elif date_value and isinstance(date_value, str):
-                date_str = date_value[:10] if ' ' in date_value else date_value
+        for row in reversed(response.data):
+            # 优先使用 sum_7，如果没有则兼容旧数据
+            sum_7 = row.get('sum_7', row.get('sum_value', 0))
+            if sum_7 == 0 and row.get('numbers'):
+                sum_7 = sum(row.get('numbers', []))
             
             draws.append({
                 'period': row.get('period'),
-                'date': date_str,
+                'date': row.get('date'),
                 'numbers': row['numbers'],
                 'special': row.get('special'),
-                'sum': row['sum_value']
+                'sum': sum_7  # 使用7码和值
             })
         
         return draws
@@ -502,7 +482,10 @@ def load_recent_draws_from_supabase(limit: int = 300) -> Optional[List[Dict]]:
 
 # ==================== 辅助函数 ====================
 def convert_6sum_to_7sum(sum_6: int) -> int:
-    """将6码和值转换为7码和值"""
+    """将6码和值转换为7码和值（兼容旧数据）"""
+    # 如果已经是7码和值（约140-210），直接返回
+    if 140 <= sum_6 <= 210:
+        return sum_6
     return int(sum_6 * 7 / 6)
 
 
@@ -2690,7 +2673,7 @@ with col3:
     st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
 
 st.markdown("---")
-
+#-----
 # ==================== 和值趋势分析 ====================
 st.subheader("📈 和值趋势分析")
 
@@ -2702,58 +2685,113 @@ show_periods = st.slider(
     step=10
 )
 
-recent_sum_draws = draws[-show_periods:] if len(draws) >= show_periods else draws
-sum_7_values = [convert_6sum_to_7sum(draw['sum']) for draw in recent_sum_draws]
-sum_df = pd.DataFrame([{'期次': i+1, '和值(7码)': val} for i, val in enumerate(sum_7_values)])
+# 获取最新100期数据（按时间顺序，旧到新）
+recent_draws = draws[-show_periods:] if len(draws) >= show_periods else draws
+# 提取期次和7码和值
+periods = [str(d.get('period', '')) for d in recent_draws]
+sum_7_values = [d.get('sum', sum(d.get('numbers', []))) for d in recent_draws]
 
-# 计算正弦拟合线（用于走势图）
-next_val = 175
+# 创建DataFrame用于绘图
+sum_df = pd.DataFrame({
+    '期次': periods,
+    '和值(7码)': sum_7_values,
+    '序号': list(range(len(periods)))  # 用于X轴
+})
+
+# 计算正弦拟合线（基于最近10期）
+next_val = None
 y_fit = []
-if len(recent_sum_draws) >= 10:
-    recent_sums = [convert_6sum_to_7sum(d['sum']) for d in recent_sum_draws[-10:]]
+if len(recent_draws) >= 10:
+    recent_10_sums = sum_7_values[-10:]
     try:
         from scipy.optimize import curve_fit
         def sine_func(x, A, omega, phi, C):
             return A * np.sin(omega * x + phi) + C
-        x = np.arange(len(recent_sums))
-        y = np.array(recent_sums)
+        x = np.arange(10)
+        y = np.array(recent_10_sums)
         A_guess = (np.max(y) - np.min(y)) / 2
         C_guess = np.mean(y)
         omega_guess = 2 * np.pi / 6.5
         params, _ = curve_fit(sine_func, x, y, p0=[A_guess, omega_guess, 0, C_guess], maxfev=2000)
         A, omega, phi, C = params
-        x_pred = np.arange(len(recent_sums) + 1)
+        x_pred = np.arange(11)
         y_pred = sine_func(x_pred, A, omega, phi, C)
         y_fit = y_pred[:-1]
         next_val = y_pred[-1]
     except:
         pass
 
-# 绘制和值走势图
-fig = px.line(sum_df, x='期次', y='和值(7码)', title=f'最近{show_periods}期和值走势')
+# 绘制走势图
+fig = go.Figure()
+fig.add_trace(go.Scatter(
+    x=sum_df['序号'],
+    y=sum_df['和值(7码)'],
+    mode='lines+markers',
+    name='实际和值',
+    line=dict(color='#ff6b6b', width=2),
+    marker=dict(size=6),
+    text=sum_df['期次'],  # 悬停显示期次
+    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>'
+))
+
+# 添加正弦拟合线
+if len(y_fit) > 0:
+    fit_x = list(range(len(sum_df) - 10, len(sum_df)))
+    fig.add_trace(go.Scatter(
+        x=fit_x,
+        y=y_fit,
+        mode='lines',
+        name='正弦拟合',
+        line=dict(color='#ff7f0e', width=2, dash='dot'),
+        hovertemplate='正弦拟合: %{y}<extra></extra>'
+    ))
+
+# 添加参考线
 fig.add_hline(y=175, line_dash="dash", line_color="red", annotation_text="理论均值(175)")
 fig.add_hrect(y0=158, y1=192, line_width=0, fillcolor="green", opacity=0.1, annotation_text="约68%区间")
-if len(y_fit) > 0:
-    fig.add_trace(go.Scatter(x=list(range(len(y_fit))), y=y_fit, mode='lines', name='正弦拟合', line=dict(color='orange', width=2, dash='dot')))
+
+# 设置X轴：显示期次标签，但只显示部分避免拥挤
+tick_interval = max(1, len(sum_df) // 10)
+fig.update_xaxis(
+    tickmode='array',
+    tickvals=sum_df['序号'][::tick_interval],
+    ticktext=sum_df['期次'][::tick_interval]
+)
+
+fig.update_layout(
+    title=f"最近{show_periods}期和值走势",
+    xaxis_title="期次",
+    yaxis_title="和值(7码)",
+    height=450,
+    hovermode='x unified'
+)
+
 st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("**📊 和值预测参考**")
+
+# 获取全局最新一期的和值
+latest_draw = draws[-1] if draws else None
+current_sum = latest_draw.get('sum', sum(latest_draw.get('numbers', []))) if latest_draw else 175
 
 # 计算三种方法的预测范围
 mean_lower, mean_upper = get_target_sum_mean_reversion_range(draws)
 ma_lower, ma_upper = get_target_sum_moving_average_range(draws)
 sine_lower, sine_upper = get_target_sum_sine_range(draws)
 
+# 计算历史均值（基于全部数据）
+all_sum_7 = [d.get('sum', sum(d.get('numbers', []))) for d in draws]
+historical_mean = np.mean(all_sum_7) if all_sum_7 else 175
+
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("理论均值", f"175")
 with col2:
-    st.metric("历史均值", f"{np.mean(sum_7_values):.1f}")
+    st.metric("历史均值", f"{historical_mean:.1f}")
 with col3:
-    current_sum = sum_7_values[-1] if sum_7_values else 175
     st.metric("当前和值", f"{current_sum}")
 with col4:
-    st.metric("正弦预测点", f"{next_val:.0f}" if isinstance(next_val, (int, float)) else "N/A")
+    st.metric("正弦预测点", f"{next_val:.0f}" if next_val else "N/A")
 
 # 显示三种方法预测范围
 col1, col2, col3 = st.columns(3)
@@ -2769,7 +2807,7 @@ st.markdown("**🎯 和值预测方法（用于选号）**")
 sum_predict_method = st.radio(
     "选择预测方法",
     options=["均值回归", "移动平均(7期)", "正弦拟合"],
-    index=1,  # 默认移动平均
+    index=1,
     key="sum_predict_method",
     horizontal=True
 )
