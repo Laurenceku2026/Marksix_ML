@@ -2464,7 +2464,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                 bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
                 bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
                 bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
-                bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method))
+                bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
                 
                 # 合并所有投注，统计频率
                 all_numbers = []
