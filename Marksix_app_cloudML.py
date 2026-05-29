@@ -344,7 +344,81 @@ def save_draws_to_supabase(draws: List[Dict]) -> bool:
     except Exception as e:
         st.error(f"保存到Supabase失败: {e}")
         return False
-
+#------------
+def incremental_sync_draws(draws: List[Dict]) -> Dict:
+    """增量同步：只更新变更的数据（优化版）"""
+    if not draws:
+        return {"inserted": 0, "updated": 0, "deleted": 0}
+    
+    supabase = init_supabase()
+    if supabase is None:
+        return {"inserted": 0, "updated": 0, "deleted": 0}
+    
+    try:
+        # ========== 统一期次为数字 ==========
+        normalized_draws = []
+        for draw in draws:
+            if draw.get('period') is None:
+                continue
+            normalized_draw = draw.copy()
+            # 期次统一转为整数（六合彩期次是数字）
+            if isinstance(draw['period'], str) and draw['period'].isdigit():
+                normalized_draw['period'] = int(draw['period'])
+            normalized_draws.append(normalized_draw)
+        
+        # 获取数据库中现有期次
+        existing_response = supabase.schema('marksix_schema').table('marksix_draws')\
+            .select("period").execute()
+        existing_periods = {row["period"] for row in existing_response.data} if existing_response.data else set()
+        
+        # 新数据中的期次
+        new_periods = {draw['period'] for draw in normalized_draws if draw.get('period') is not None}
+        
+        # 需要删除的期次
+        to_delete = existing_periods - new_periods
+        
+        # 需要新增的期次
+        to_insert = new_periods - existing_periods
+        
+        inserted = 0
+        updated = 0
+        deleted = 0
+        
+        # 执行删除
+        for period in to_delete:
+            try:
+                supabase.schema('marksix_schema').table('marksix_draws')\
+                    .delete().eq("period", period).execute()
+                deleted += 1
+            except Exception as e:
+                st.warning(f"删除期次 {period} 失败: {e}")
+        
+        # 准备需要 upsert 的数据
+        upsert_data = []
+        for draw in normalized_draws:
+            period = draw['period']
+            numbers = draw.get('numbers', [])
+            upsert_data.append({
+                "period": period,
+                "date": draw.get('date'),
+                "numbers": numbers,
+                "special": draw.get('special', 0),
+                "sum_value": draw.get('sum', sum(numbers))
+            })
+        
+        # 使用 upsert 批量操作
+        if upsert_data:
+            result = supabase.schema('marksix_schema').table('marksix_draws')\
+                .upsert(upsert_data, on_conflict='period').execute()
+            inserted = len(to_insert)
+            updated = len(new_periods) - len(to_insert)
+        
+        return {"inserted": inserted, "updated": updated, "deleted": deleted}
+        
+    except Exception as e:
+        st.error(f"增量同步失败: {e}")
+        return {"inserted": 0, "updated": 0, "deleted": 0}
+#-------------
 def load_draws_from_supabase() -> Optional[List[Dict]]:
     """从Supabase加载开奖数据（按期次数字排序）"""
     supabase = init_supabase()
@@ -937,7 +1011,7 @@ def show_admin_page():
                 st.rerun()
     
     st.markdown("---")
-    
+    #---------
     # 可编辑表格
     with st.form(key="data_editor_form"):
         edited_df = st.data_editor(
@@ -945,7 +1019,7 @@ def show_admin_page():
             use_container_width=True,
             height=500,
             num_rows="dynamic",
-            key="ssq_data_editor",
+            key="marksix_data_editor",  # 修改 key 避免与双色球冲突
             column_config={
                 "期次": st.column_config.NumberColumn("期次", required=True, step=1),
                 "開獎日期": st.column_config.TextColumn("開獎日期", help="格式: YYYY-MM-DD"),
@@ -964,7 +1038,10 @@ def show_admin_page():
         
         with col_save1:
             overwrite_submitted = st.form_submit_button("💾 全量覆盖保存", type="primary", use_container_width=True)
+        with col_save2:
+            incremental_submitted = st.form_submit_button("🔄 增量同步保存", use_container_width=True)
         
+        # ========== 全量覆盖保存 ==========
         if overwrite_submitted:
             if edited_df is None or len(edited_df) == 0:
                 st.error("没有数据可保存")
@@ -1021,6 +1098,65 @@ def show_admin_page():
                             st.error("保存失败")
                     else:
                         st.error("没有有效数据可保存")
+        
+        # ========== 增量同步保存 ==========
+        if incremental_submitted:
+            if edited_df is None or len(edited_df) == 0:
+                st.error("没有数据可同步")
+            else:
+                with st.spinner("正在执行增量同步..."):
+                    new_draws = []
+                    errors = 0
+                    
+                    for idx, row in edited_df.iterrows():
+                        try:
+                            if pd.isna(row['期次']) or row['期次'] == 0:
+                                continue
+                            
+                            period = int(row['期次'])
+                            date = str(row['開獎日期']) if pd.notna(row['開獎日期']) and row['開獎日期'] != '' else None
+                            
+                            numbers = [
+                                int(row['B1']) if pd.notna(row['B1']) else 0,
+                                int(row['B2']) if pd.notna(row['B2']) else 0,
+                                int(row['B3']) if pd.notna(row['B3']) else 0,
+                                int(row['B4']) if pd.notna(row['B4']) else 0,
+                                int(row['B5']) if pd.notna(row['B5']) else 0,
+                                int(row['B6']) if pd.notna(row['B6']) else 0,
+                            ]
+                            
+                            special = int(row['B7']) if pd.notna(row['B7']) else 0
+                            
+                            valid_numbers = all(1 <= n <= 49 for n in numbers) and len(set(numbers)) == 6
+                            valid_special = 1 <= special <= 49
+                            
+                            if valid_numbers and valid_special:
+                                new_draws.append({
+                                    'period': period,
+                                    'date': date,
+                                    'numbers': sorted(numbers),
+                                    'special': special,
+                                    'sum': sum(numbers)
+                                })
+                            else:
+                                errors += 1
+                        except Exception:
+                            errors += 1
+                    
+                    if errors > 0:
+                        st.warning(f"跳过 {errors} 行无效数据")
+                    
+                    if new_draws:
+                        new_draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
+                        result = incremental_sync_draws(new_draws)
+                        st.success(f"增量同步完成：新增 {result['inserted']} 期，更新 {result['updated']} 期，删除 {result['deleted']} 期")
+                        # 重新加载数据到session
+                        refreshed_draws = load_draws_from_supabase()
+                        if refreshed_draws:
+                            st.session_state['draws_loaded'] = refreshed_draws
+                        st.rerun()
+                    else:
+                        st.error("没有有效数据可同步")
     
     st.markdown("---")
     
