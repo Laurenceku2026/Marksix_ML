@@ -2692,53 +2692,26 @@ sum_7_values = [d.get('sum', sum(d.get('numbers', []))) for d in recent_draws]
 
 # 创建DataFrame
 sum_df = pd.DataFrame({
-    '序号': list(range(len(periods))),
     '期次': periods,
     '和值(7码)': sum_7_values
 })
 
-# 绘制走势图
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=sum_df['序号'],
-    y=sum_df['和值(7码)'],
-    mode='lines+markers',
-    name='实际和值',
-    line=dict(color='#ff6b6b', width=2),
-    marker=dict(size=6),
-    text=sum_df['期次'],
-    hovertemplate='期次: %{text}<br>和值: %{y}<extra></extra>'
-))
+# 使用 st.altair_chart
+import altair as alt
+
+chart = alt.Chart(sum_df).mark_line(point=True, color='#ff6b6b').encode(
+    x=alt.X('期次:O', sort=None, title='期次'),
+    y=alt.Y('和值(7码):Q', title='和值(7码)'),
+    tooltip=['期次', '和值(7码)']
+).properties(
+    title=f'最近{show_periods}期和值走势',
+    height=400
+)
 
 # 添加理论均值线
-fig.add_hline(y=175, line_dash="dash", line_color="red", annotation_text="理论均值(175)")
+mean_line = alt.Chart(pd.DataFrame({'y': [175]})).mark_rule(color='red', strokeDash=[5, 5]).encode(y='y')
 
-# 添加约68%区间（158-192）
-fig.add_hrect(
-    y0=158, y1=192, 
-    line_width=0, 
-    fillcolor="green", 
-    opacity=0.1, 
-    annotation_text="约68%区间"
-)
-
-# 设置X轴标签
-tick_interval = max(1, len(sum_df) // 10)
-fig.update_xaxis(
-    tickmode='array',
-    tickvals=sum_df['序号'][::tick_interval],
-    ticktext=sum_df['期次'][::tick_interval]
-)
-
-fig.update_layout(
-    title=f"最近{show_periods}期和值走势",
-    xaxis_title="期次",
-    yaxis_title="和值(7码)",
-    height=400,
-    hovermode='x unified'
-)
-
-st.plotly_chart(fig, use_container_width=True)
+st.altair_chart(chart + mean_line, use_container_width=True)
 
 st.markdown("**📊 和值统计**")
 col1, col2, col3 = st.columns(3)
