@@ -444,7 +444,7 @@ def load_draws_from_supabase() -> Optional[List[Dict]]:
         st.error(f"从Supabase加载数据失败: {e}")
         return None
 #------
-def load_recent_draws_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
+def load_recent_draws_from_supabase(limit: int = 1000) -> Optional[List[Dict]]:
     """加载最近N期数据（按期次降序取N条，再反转）"""
     supabase = init_supabase()
     if supabase is None:
@@ -458,6 +458,26 @@ def load_recent_draws_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
         
         if not response.data:
             return None
+        
+        draws = []
+        for row in reversed(response.data):
+            # 优先使用 sum_7，如果没有则兼容旧数据
+            sum_7 = row.get('sum_7', row.get('sum_value', 0))
+            if sum_7 == 0 and row.get('numbers'):
+                sum_7 = sum(row.get('numbers', []))
+            
+            draws.append({
+                'period': row.get('period'),
+                'date': row.get('date'),
+                'numbers': row['numbers'],
+                'special': row.get('special'),
+                'sum': sum_7  # 使用7码和值
+            })
+        
+        return draws
+    except Exception as e:
+        st.error(f"从Supabase加载数据失败: {e}")
+        return None
         
         draws = []
         for row in reversed(response.data):
@@ -1121,7 +1141,7 @@ def show_admin_page():
                 'B5': numbers[4] if len(numbers) > 4 else 0,
                 'B6': numbers[5] if len(numbers) > 5 else 0,
                 'B7': d.get('special', 0),
-                '和值': d.get('sum', 0)
+                '和值': d.get('sum_7', d.get('sum', 0))
             }
             data_rows.append(row)
         df = pd.DataFrame(data_rows)
@@ -2693,20 +2713,59 @@ sum_7_values = [d.get('sum', sum(d.get('numbers', []))) for d in recent_draws]
 # 创建DataFrame
 sum_df = pd.DataFrame({
     '期次': periods,
-    '和值(7码)': sum_7_values
+    '和值(7码)': sum_7_values,
+    '序号': list(range(len(periods)))
 })
 
-# 使用 st.altair_chart
+# 计算正弦拟合线（基于最近10期）
+y_fit = []
+fit_x = []
+next_val = None
+if len(recent_draws) >= 10:
+    recent_10_sums = sum_7_values[-10:]
+    try:
+        from scipy.optimize import curve_fit
+        def sine_func(x, A, omega, phi, C):
+            return A * np.sin(omega * x + phi) + C
+        x = np.arange(10)
+        y = np.array(recent_10_sums)
+        A_guess = (np.max(y) - np.min(y)) / 2
+        C_guess = np.mean(y)
+        omega_guess = 2 * np.pi / 6.5
+        params, _ = curve_fit(sine_func, x, y, p0=[A_guess, omega_guess, 0, C_guess], maxfev=2000)
+        A, omega, phi, C = params
+        x_pred = np.arange(11)
+        y_pred = sine_func(x_pred, A, omega, phi, C)
+        y_fit = y_pred[:-1]
+        fit_x = list(range(len(sum_df) - 10, len(sum_df)))
+        next_val = y_pred[-1]
+    except:
+        pass
+
+# 导入 altair
 import altair as alt
 
+# 绘制实际和值
 chart = alt.Chart(sum_df).mark_line(point=True, color='#ff6b6b').encode(
-    x=alt.X('期次:O', sort=None, title='期次'),
+    x=alt.X('序号:Q', title='期次', axis=alt.Axis(labelAngle=-45, tickCount=10)),
     y=alt.Y('和值(7码):Q', title='和值(7码)'),
     tooltip=['期次', '和值(7码)']
 ).properties(
     title=f'最近{show_periods}期和值走势',
     height=400
 )
+
+# 添加正弦拟合线
+if len(y_fit) > 0:
+    fit_df = pd.DataFrame({
+        '序号': fit_x,
+        '拟合值': y_fit
+    })
+    fit_line = alt.Chart(fit_df).mark_line(color='#ff7f0e', strokeDash=[5, 5]).encode(
+        x='序号:Q',
+        y='拟合值:Q'
+    )
+    chart = chart + fit_line
 
 # 添加理论均值线
 mean_line = alt.Chart(pd.DataFrame({'y': [175]})).mark_rule(color='red', strokeDash=[5, 5]).encode(y='y')
