@@ -2250,15 +2250,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     """
     单方法回测（用于5种方法对比）
     
-    返回: {
-        "方法": display_name,
-        "ROI": roi,
-        "总成本": total_cost,
-        "总奖金": total_prize,
-        "净收益": net,
-        "中奖率": win_rate,
-        "中奖明细": "26045(3,80), 26043(4,1040)..."
-    }
+    优化：每5期重新训练一次ML模型，大幅提升回测速度
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2268,13 +2260,21 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     total_cost = 0
     total_prize = 0
     win_count = 0
-    prize_details = []  # 存储中奖明细
+    prize_details = []
+    
+    # ========== 缓存变量 ==========
+    cached_bets = None
+    cached_train_end_period = None
+    retrain_interval = 5  # 每5期重新训练一次
     
     for i in range(test_periods):
         # 训练数据：使用当期之前的数据
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
+        
+        # 获取训练数据的最后一期期次（用于判断是否需要重新训练）
+        train_end_period = train_draws[-1].get('period') if train_draws else None
         
         # 设置随机种子
         if seed_mode == "date":
@@ -2296,18 +2296,40 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         random.seed(seed_val)
         np.random.seed(seed_val)
         
-        # 根据方法生成投注
-        if method_key == "方法1":
-            bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-        elif method_key == "方法2":
-            bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-        elif method_key == "方法3":
-            bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
-        elif method_key == "方法4":
-            bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+        # ========== 判断是否需要重新生成投注 ==========
+        need_retrain = False
+        
+        if method_key in ["方法1", "方法2"]:
+            # 方法1/2 很快，每期都重新生成
+            need_retrain = True
+        elif method_key in ["方法3", "方法4", "方法5"]:
+            # ML方法：每5期或数据变化时重新训练
+            if i % retrain_interval == 0 or train_end_period != cached_train_end_period:
+                need_retrain = True
+                cached_train_end_period = train_end_period
+            else:
+                need_retrain = False
+        
+        # 生成投注
+        if need_retrain or cached_bets is None:
+            if method_key == "方法1":
+                bets = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            elif method_key == "方法2":
+                bets = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            elif method_key == "方法3":
+                bets = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            elif method_key == "方法4":
+                bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window)
+            else:
+                # 方法5: 综合模式
+                bets = generate_bets_method5_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, train_window, train_window, train_window)
+            
+            # 缓存投注结果（仅对ML方法）
+            if method_key in ["方法3", "方法4", "方法5"]:
+                cached_bets = bets
         else:
-            # 方法5: 综合模式
-            bets = generate_bets_method5_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, train_window, train_window, train_window)
+            # 使用缓存的投注
+            bets = cached_bets
         
         # 计算最佳匹配的奖金和中奖数
         best_prize = 0
@@ -2320,17 +2342,20 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             
             # 中奖分数：正码数 + 0.5(特码)
             match_score = match_count + (0.5 if has_special else 0)
+
+            # 调试：打印所有投注的匹配数和奖金
+            print(f"投注: {bet['numbers']}, 开奖正码: {test_draw['numbers']}, 特码: {test_draw.get('special')}")
+            print(f"  match_count={match_count}, has_special={has_special}, match_score={match_score}, prize={prize}")
             
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
         
-        total_cost += num_bets * 35  # 每组成本35元
+        total_cost += num_bets * 35
         total_prize += best_prize
         
         if best_prize > 0:
             win_count += 1
-            # 根据奖金确定显示格式
             if best_prize >= 10180000:
                 prize_desc = "1018万"
             elif best_prize >= 3060000:
@@ -2347,7 +2372,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
     win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
     
-    # 方法名称映射
     name_map = {
         "方法1": "方法1: 当前方法",
         "方法2": "方法2: 胆拖混合",
