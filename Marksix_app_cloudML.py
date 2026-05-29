@@ -2710,151 +2710,151 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
     else:
         st.error("解析失败，请检查格式")
 #---------------
-    # ==================== 策略回测（5种方法对比） ====================
-    st.markdown("---")
-    st.subheader("📊 策略回测（5种方法对比）")
-    st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
+# ==================== 策略回测（5种方法对比） ====================
+st.markdown("---")
+st.subheader("📊 策略回测（5种方法对比）")
+st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
+
+# 获取数据
+backtest_draws = load_draws_from_supabase()
+
+if backtest_draws is None or len(backtest_draws) < 50:
+    st.warning("⚠️ 数据不足，至少需要50期数据才能进行回测")
+else:
+    sorted_backtest_draws = sorted(backtest_draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
+    total_draws_count = len(backtest_draws)
+    st.info(f"📊 当前云端有 {total_draws_count} 期数据 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
     
-    # 获取数据
-    backtest_draws = load_draws_from_supabase()
+    # ========== 回测参数设置 ==========
+    with st.expander("⚙️ 回测参数设置", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
+            test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
+        
+        with col2:
+            test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
+            st.markdown("**训练期数设置**")
+            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
+            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
+        
+        with col3:
+            # 计算最大可用回测期数
+            max_window = max(method1_window, method3_window, method4_window)
+            max_backtest_periods = total_draws_count - max_window
+            if max_backtest_periods < 1:
+                st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
+                st.stop()
+            
+            test_periods = st.number_input(
+                "回测期数", 
+                min_value=1, 
+                max_value=max_backtest_periods, 
+                value=min(50, max_backtest_periods), 
+                step=5,
+                key="backtest_periods"
+            )
+            st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
+        
+        st.markdown("---")
+        st.markdown("**🎲 随机种子模式**")
+        col_seed1, col_seed2 = st.columns(2)
+        with col_seed1:
+            seed_mode_option = st.radio(
+                "选择种子模式",
+                options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
+                index=0,
+                key="backtest_seed_mode",
+                horizontal=False
+            )
+        with col_seed2:
+            fixed_seed_value = 1
+            if "用户输入固定种子" in seed_mode_option:
+                fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1, key="bt_fixed_seed")
     
-    if backtest_draws is None or len(backtest_draws) < 50:
-        st.warning("⚠️ 数据不足，至少需要50期数据才能进行回测")
+    # 映射种子模式
+    if "日期+21:15" in seed_mode_option:
+        seed_mode = "date"
+    elif "用户输入固定种子" in seed_mode_option:
+        seed_mode = "fixed"
     else:
-        sorted_backtest_draws = sorted(backtest_draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
-        total_draws_count = len(backtest_draws)
-        st.info(f"📊 当前云端有 {total_draws_count} 期数据 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
+        seed_mode = "random"
+    
+    # ========== 运行回测按钮 ==========
+    if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
+        # 5种方法列表
+        methods = [
+            ("方法1: 当前方法", "方法1"),
+            ("方法2: 胆拖混合", "方法2"),
+            ("方法3: LightGBM", "方法3"),
+            ("方法4: XGBoost+NN", "方法4"),
+            ("方法5: 综合模式", "方法5")
+        ]
         
-        # ========== 回测参数设置 ==========
-        with st.expander("⚙️ 回测参数设置", expanded=True):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
-                test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
-            
-            with col2:
-                test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
-                st.markdown("**训练期数设置**")
-                method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=50, step=10, key="bt_method1_window")
-                method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-                method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=100, max_value=500, value=200, step=20, key="bt_method4_window")
-            
-            with col3:
-                # 计算最大可用回测期数
-                max_window = max(method1_window, method3_window, method4_window)
-                max_backtest_periods = total_draws_count - max_window
-                if max_backtest_periods < 1:
-                    st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
-                    st.stop()
-                
-                test_periods = st.number_input(
-                    "回测期数", 
-                    min_value=1, 
-                    max_value=max_backtest_periods, 
-                    value=min(50, max_backtest_periods), 
-                    step=5,
-                    key="backtest_periods"
-                )
-                st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
-            
-            st.markdown("---")
-            st.markdown("**🎲 随机种子模式**")
-            col_seed1, col_seed2 = st.columns(2)
-            with col_seed1:
-                seed_mode_option = st.radio(
-                    "选择种子模式",
-                    options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
-                    index=0,
-                    key="backtest_seed_mode",
-                    horizontal=False
-                )
-            with col_seed2:
-                fixed_seed_value = 1
-                if "用户输入固定种子" in seed_mode_option:
-                    fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1, key="bt_fixed_seed")
+        # 显示进度条
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        # 映射种子模式
-        if "日期+21:15" in seed_mode_option:
-            seed_mode = "date"
-        elif "用户输入固定种子" in seed_mode_option:
-            seed_mode = "fixed"
-        else:
-            seed_mode = "random"
+        all_results = []
         
-        # ========== 运行回测按钮 ==========
-        if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-            # 5种方法列表
-            methods = [
-                ("方法1: 当前方法", "方法1"),
-                ("方法2: 胆拖混合", "方法2"),
-                ("方法3: LightGBM", "方法3"),
-                ("方法4: XGBoost+NN", "方法4"),
-                ("方法5: 综合模式", "方法5")
-            ]
+        for idx, (display_name, method_key) in enumerate(methods):
+            status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
             
-            # 显示进度条
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # 根据方法选择对应的训练窗口
+            if method_key in ["方法1", "方法2"]:
+                bt_window = method1_window
+            elif method_key == "方法3":
+                bt_window = method3_window
+            else:
+                bt_window = method4_window
             
-            all_results = []
+            # 调用回测函数
+            result = run_backtest_single_method(
+                backtest_draws, method_key, test_bets, test_num_count,
+                test_trend_window, test_periods, bt_window,
+                seed_mode, fixed_seed_value
+            )
             
-            for idx, (display_name, method_key) in enumerate(methods):
-                status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
-                
-                # 根据方法选择对应的训练窗口
-                if method_key in ["方法1", "方法2"]:
-                    bt_window = method1_window
-                elif method_key == "方法3":
-                    bt_window = method3_window
-                else:
-                    bt_window = method4_window
-                
-                # 调用回测函数
-                result = run_backtest_single_method(
-                    backtest_draws, method_key, test_bets, test_num_count,
-                    test_trend_window, test_periods, bt_window,
-                    seed_mode, fixed_seed_value
-                )
-                
-                if result:
-                    all_results.append(result)
-                
-                progress_bar.progress((idx + 1) / len(methods))
+            if result:
+                all_results.append(result)
             
-            status_text.text("回测完成！")
-            progress_bar.empty()
+            progress_bar.progress((idx + 1) / len(methods))
+        
+        status_text.text("回测完成！")
+        progress_bar.empty()
+        
+        # 显示结果表格
+        if all_results:
+            df_results = pd.DataFrame(all_results)
             
-            # 显示结果表格
-            if all_results:
-                df_results = pd.DataFrame(all_results)
-                
-                # 格式化显示
-                st.dataframe(
-                    df_results.style.format({
-                        'ROI': '{:.1f}%',
-                        '总成本': '¥{:.0f}',
-                        '总奖金': '¥{:.0f}',
-                        '净收益': '¥{:.0f}',
-                        '中奖率': '{:.1f}%'
-                    }),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
-                    }
-                )
-                
-                # 找出最佳表现
-                best_row = all_results[0]
-                best_roi = best_row['ROI']
-                best_method = best_row['方法']
-                for r in all_results:
-                    if r['ROI'] > best_roi:
-                        best_roi = r['ROI']
-                        best_method = r['方法']
-                
-                st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
-                st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
+            # 格式化显示
+            st.dataframe(
+                df_results.style.format({
+                    'ROI': '{:.1f}%',
+                    '总成本': '¥{:.0f}',
+                    '总奖金': '¥{:.0f}',
+                    '净收益': '¥{:.0f}',
+                    '中奖率': '{:.1f}%'
+                }),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
+                }
+            )
+            
+            # 找出最佳表现
+            best_row = all_results[0]
+            best_roi = best_row['ROI']
+            best_method = best_row['方法']
+            for r in all_results:
+                if r['ROI'] > best_roi:
+                    best_roi = r['ROI']
+                    best_method = r['方法']
+            
+            st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
+            st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
 #---------------------------------
     st.markdown("---")
     st.caption("DFSS智能选号工具 v7.1")
