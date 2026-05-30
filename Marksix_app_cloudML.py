@@ -1600,8 +1600,9 @@ def generate_one_combination(weights: Dict[int, float], num_count: int, target_s
 
 # ==================== 方法1：当前方法 ====================
 def generate_bets_method1_current(draws: List[Dict], num_bets: int, num_count: int,
-                                    trend_window: int, random_seed: Optional[int],
-                                    analysis_periods: int = 50) -> List[Dict]:
+                                   trend_window: int, random_seed: Optional[int],
+                                   analysis_periods: int, sum_predict_method: str) -> List[Dict]:
+
     """
     方法1：当前方法
     - 冷热码分析
@@ -1700,10 +1701,10 @@ def select_anchor_numbers(draws: List[Dict], num_anchors: int = 3, analysis_peri
     sorted_candidates = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
     return [num for num, _ in sorted_candidates[:num_anchors]]
 
-
+#----------------
 def generate_bets_method2_hybrid(draws: List[Dict], num_bets: int, num_count: int,
                                    trend_window: int, random_seed: Optional[int],
-                                   analysis_periods: int = 50) -> List[Dict]:
+                                   analysis_periods: int, sum_predict_method: str) -> List[Dict]:
     """
     方法2：胆拖混合
     - 选择胆码
@@ -1901,10 +1902,10 @@ def predict_with_lightgbm(model: Any, draws: List[Dict]) -> Optional[List[int]]:
     predictions.sort(key=lambda x: x[1], reverse=True)
     return [num for num, prob in predictions[:7]]
 
-
+#----
 def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
-                                     lightgbm_lookback: int = 100) -> List[Dict]:
+                                     lightgbm_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
     """方法3：LightGBM（支持可配置训练期数）"""
     if not LGB_AVAILABLE:
         return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50)
@@ -2144,7 +2145,7 @@ def predict_with_ensemble(model_dict: Dict, draws: List[Dict]) -> Optional[List[
 
 def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
-                                     ensemble_lookback: int = 200) -> List[Dict]:
+                                     ensemble_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
     """方法4：XGBoost + 神经网络集成（支持可配置训练期数）"""
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100)
@@ -2417,6 +2418,31 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
     })
     
     return pd.DataFrame(results)
+#---------------------
+# ==================== 统一的和值目标获取函数 ====================
+
+def get_sum_target_by_method(draws: List[Dict], num_count: int, trend_window: int, sum_predict_method: str) -> int:
+    """
+    根据用户选择的预测方法返回和值目标（每注独立随机）
+    
+    参数:
+        draws: 历史数据
+        num_count: 号码个数（7）
+        trend_window: 趋势窗口（仅用于均值回归，实际未使用）
+        sum_predict_method: "均值回归" / "移动平均(7期)" / "正弦拟合"
+    
+    返回:
+        随机生成的和值目标
+    """
+    if sum_predict_method == "均值回归":
+        lower, upper = get_target_sum_mean_reversion_range(draws, num_count)
+    elif sum_predict_method == "移动平均(7期)":
+        lower, upper = get_target_sum_moving_average_range(draws)
+    else:  # 正弦拟合
+        lower, upper = get_target_sum_sine_range(draws)
+    
+    return random.randint(lower, upper)
+
 #-------------------------
 def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int, num_count: int,
                                  trend_window: int, test_periods: int, train_window: int,
