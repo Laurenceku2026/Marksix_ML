@@ -403,6 +403,43 @@ def incremental_sync_draws(draws: List[Dict]) -> Dict:
         st.error(f"增量同步失败: {e}")
         return {"inserted": 0, "updated": 0, "deleted": 0}
 #-------------
+def load_recent_draws_from_supabase(limit: int = 500) -> Optional[List[Dict]]:
+    """加载最近N期数据（按期次降序取N条，再反转）"""
+    supabase = init_supabase()
+    if supabase is None:
+        return None
+    try:
+        response = supabase.schema('marksix_schema').table('marksix_draws')\
+            .select("*")\
+            .order("period", desc=True)\
+            .limit(limit)\
+            .execute()
+        
+        if not response.data:
+            return None
+        
+        draws = []
+        for row in reversed(response.data):
+            # 优先使用 sum_7，如果没有则兼容旧数据
+            sum_7 = row.get('sum_7', row.get('sum_value', 0))
+            if sum_7 == 0 and row.get('numbers'):
+                numbers = row.get('numbers', [])
+                special = row.get('special', 0)
+                sum_7 = sum(numbers) + special
+            
+            draws.append({
+                'period': row.get('period'),
+                'date': row.get('date'),
+                'numbers': row['numbers'],
+                'special': row.get('special'),
+                'sum': sum_7  # 7码和值
+            })
+        
+        return draws
+    except Exception as e:
+        st.error(f"从Supabase加载数据失败: {e}")
+        return None
+#-------------
 def load_draws_from_supabase() -> Optional[List[Dict]]:
     """从Supabase加载开奖数据（按期次数字排序）"""
     supabase = init_supabase()
@@ -2577,7 +2614,7 @@ if st.session_state.get('show_admin', False):
 # ==================== 加载数据 ====================
 if st.session_state.get('draws_loaded') is None:
     with st.spinner("加载数据中..."):
-        draws = load_recent_draws_from_supabase(limit=300)
+        draws = load_recent_draws_from_supabase(limit=500)
         if draws:
             st.session_state['draws_loaded'] = draws
         else:
