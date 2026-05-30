@@ -309,8 +309,9 @@ def save_draws_to_supabase(draws: List[Dict]) -> bool:
         supabase.schema('marksix_schema').table('marksix_draws').delete().neq("id", 0).execute()
         
         for draw in draws:
-            numbers = draw['numbers']
-            sum_7 = sum(numbers)  # 7码和值
+            numbers = draw['numbers']  # 6个正码
+            special = draw.get('special', 0)
+            sum_7 = sum(numbers) + special  # 7码和值 = 6码和值 + 特码
             
             data = {
                 "period": draw.get('period'),
@@ -444,56 +445,38 @@ def load_draws_from_supabase() -> Optional[List[Dict]]:
         st.error(f"从Supabase加载数据失败: {e}")
         return None
 #------
-def load_recent_draws_from_supabase(limit: int = 1000) -> Optional[List[Dict]]:
-    """加载最近N期数据（按期次降序取N条，再反转）"""
+def load_draws_from_supabase() -> Optional[List[Dict]]:
+    """从Supabase加载全部开奖数据"""
     supabase = init_supabase()
     if supabase is None:
         return None
     try:
         response = supabase.schema('marksix_schema').table('marksix_draws')\
             .select("*")\
-            .order("period", desc=True)\
-            .limit(limit)\
             .execute()
         
         if not response.data:
             return None
         
         draws = []
-        for row in reversed(response.data):
-            # 优先使用 sum_7，如果没有则兼容旧数据
+        for row in response.data:
+            # 优先使用 sum_7
             sum_7 = row.get('sum_7', row.get('sum_value', 0))
             if sum_7 == 0 and row.get('numbers'):
-                sum_7 = sum(row.get('numbers', []))
+                numbers = row.get('numbers', [])
+                special = row.get('special', 0)
+                sum_7 = sum(numbers) + special
             
             draws.append({
                 'period': row.get('period'),
                 'date': row.get('date'),
                 'numbers': row['numbers'],
                 'special': row.get('special'),
-                'sum': sum_7  # 使用7码和值
+                'sum': sum_7
             })
         
-        return draws
-    except Exception as e:
-        st.error(f"从Supabase加载数据失败: {e}")
-        return None
-        
-        draws = []
-        for row in reversed(response.data):
-            # 优先使用 sum_7，如果没有则兼容旧数据
-            sum_7 = row.get('sum_7', row.get('sum_value', 0))
-            if sum_7 == 0 and row.get('numbers'):
-                sum_7 = sum(row.get('numbers', []))
-            
-            draws.append({
-                'period': row.get('period'),
-                'date': row.get('date'),
-                'numbers': row['numbers'],
-                'special': row.get('special'),
-                'sum': sum_7  # 使用7码和值
-            })
-        
+        # 按期次排序
+        draws.sort(key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
         return draws
     except Exception as e:
         st.error(f"从Supabase加载数据失败: {e}")
