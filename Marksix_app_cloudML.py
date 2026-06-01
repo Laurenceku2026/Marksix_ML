@@ -2521,6 +2521,8 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                                  trend_window: int, test_periods: int, train_window: int,
                                  seed_mode: str, fixed_seed_value: int,
                                  sum_predict_method: str = "移动平均(7期)") -> Optional[Dict]:
+
+    print(f"🔍 回测开始: method={method_key}, num_count={num_count}")                                 
     """
     单方法回测 - 完整修复版
     
