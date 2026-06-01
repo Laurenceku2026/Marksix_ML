@@ -2623,12 +2623,13 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         best_match_score = 0
         
         for bet in bets:
+            print(f"DEBUG: bet号码个数 = {len(bet['numbers'])}")  # 添加这行
             # 使用修复后的奖金计算函数
             prize = calculate_7code_prize(bet['numbers'], test_draw)
             
             # 使用修复后的匹配分数计算
             match_score = get_best_match_score(bet['numbers'], test_draw)
-            
+            print(f"DEBUG: prize={prize}, match_score={match_score}")
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
