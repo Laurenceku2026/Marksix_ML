@@ -1383,7 +1383,7 @@ def get_method_a_score_details(draws: List[Dict],
             'hot_pool': List[int],           # 热池号码列表
             'cold_pool': List[int],          # 冷池号码列表
             'scores': Dict[int, int],        # 所有号码评分
-            'probs': Dict[int, float],       # 热池内抽出概率
+            'hot_probs': Dict[int, float],   # 热池内抽出概率
             'cold_probs': Dict[int, float],  # 冷池内抽出概率
             'zone_rank': Dict[int, int],     # 各分区排名
             'zone_counts': Dict[int, int],   # 各分区出现次数
@@ -1399,18 +1399,20 @@ def get_method_a_score_details(draws: List[Dict],
     hot_pool, cold_pool = split_pools_by_absence(draws, hot_range)
     
     # 计算热池内抽出概率
-    hot_scores = {num: scores[num] for num in hot_pool}
-    hot_score_list = [hot_scores[num] for num in hot_pool]
-    exp_hot = np.exp(np.array(hot_score_list) / hot_temperature)
-    hot_probs = exp_hot / np.sum(exp_hot)
-    hot_probs_dict = {num: prob for num, prob in zip(hot_pool, hot_probs)}
+    hot_probs_dict = {}
+    if hot_pool:
+        hot_scores = [scores[num] for num in hot_pool]
+        exp_hot = np.exp(np.array(hot_scores) / hot_temperature)
+        hot_probs = exp_hot / np.sum(exp_hot)
+        hot_probs_dict = {num: prob for num, prob in zip(hot_pool, hot_probs)}
     
     # 计算冷池内抽出概率
-    cold_scores = {num: scores[num] for num in cold_pool}
-    cold_score_list = [cold_scores[num] for num in cold_pool]
-    exp_cold = np.exp(np.array(cold_score_list) / cold_temperature)
-    cold_probs = exp_cold / np.sum(exp_cold)
-    cold_probs_dict = {num: prob for num, prob in zip(cold_pool, cold_probs)}
+    cold_probs_dict = {}
+    if cold_pool:
+        cold_scores = [scores[num] for num in cold_pool]
+        exp_cold = np.exp(np.array(cold_scores) / cold_temperature)
+        cold_probs = exp_cold / np.sum(exp_cold)
+        cold_probs_dict = {num: prob for num, prob in zip(cold_pool, cold_probs)}
     
     # 计算分区排名
     zone_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0}
