@@ -1062,79 +1062,91 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
 
 # ==================== 回测核心函数 ====================
 def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
-    """
-    计算N码复式的实际中奖金额（半注）
-    支持6-10码复式
+    from math import comb
     
-    参数:
-        bet_numbers: N个号码的列表（N >= 6）
-        draw: 开奖数据，包含 numbers(6个正码) 和 special(特码)
+    draw_numbers = set(draw['numbers'])
+    draw_special = draw.get('special')
     
-    返回:
-        总奖金（半注）
-    """
-    draw_numbers = set(draw['numbers'])      # 6个正码
-    draw_special = draw.get('special')       # 特码
-    
-    N = len(bet_numbers)                     # 复式号码个数
-    A = len(set(bet_numbers) & draw_numbers) # 中奖正码个数
+    N = len(bet_numbers)
+    A = len(set(bet_numbers) & draw_numbers)
     has_special = draw_special is not None and draw_special in bet_numbers
-    print(f"DEBUG: N={N}, A={A}, has_special={has_special}")  # 添加这行
-    # 半注奖金表（基于官方派彩规则）
+    
     PRIZES = {
-        7: 20,      # 第7组：中3码
-        6: 160,     # 第6组：中3码+特码
-        5: 320,     # 第5组：中4码
-        4: 4800,    # 第4组：中4码+特码
-        3: 30800,   # 第3组：中5码
-        2: 1530000, # 第2组：中5码+特码
-        1: 5090000, # 第1组：中6码
+        7: 20, 6: 160, 5: 320, 4: 4800, 3: 30800, 2: 1530000, 1: 5090000,
     }
     
-    # 特码在N码中时，非中奖号码个数要减1（特码占用一个位置）
     non_win_count = N - A
     if has_special:
         non_win_count -= 1
-    
-    # 确保非中奖数量不为负数
     non_win_count = max(0, non_win_count)
+    
+    # 只在 A >= 3 时打印详细日志
+    if A >= 3:
+        print(f"\n{'='*50}")
+        print(f"DEBUG: N={N}, A={A}, has_special={has_special}")
+        print(f"DEBUG: non_win_count={non_win_count}")
     
     total_prize = 0
     
-    # 第7组：中3码（无特码）
+    # 第7组
     if A >= 3 and non_win_count >= 3:
         count = comb(A, 3) * comb(non_win_count, 3)
-        total_prize += count * PRIZES[7]
+        prize = count * PRIZES[7]
+        if A >= 3:
+            print(f"DEBUG: 中3码(无特): count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第6组：中3码+特码（必须有特码）
+    # 第6组
     if has_special and A >= 3 and non_win_count >= 2:
         count = comb(A, 3) * comb(non_win_count, 2)
-        total_prize += count * PRIZES[6]
+        prize = count * PRIZES[6]
+        if A >= 3:
+            print(f"DEBUG: 中3码+特: count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第5组：中4码（无特码）
+    # 第5组
     if A >= 4 and non_win_count >= 2:
         count = comb(A, 4) * comb(non_win_count, 2)
-        total_prize += count * PRIZES[5]
+        prize = count * PRIZES[5]
+        if A >= 3:
+            print(f"DEBUG: 中4码(无特): count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第4组：中4码+特码（必须有特码）
+    # 第4组
     if has_special and A >= 4 and non_win_count >= 1:
         count = comb(A, 4) * comb(non_win_count, 1)
-        total_prize += count * PRIZES[4]
+        prize = count * PRIZES[4]
+        if A >= 3:
+            print(f"DEBUG: 中4码+特: count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第3组：中5码（无特码）
+    # 第3组
     if A >= 5 and non_win_count >= 1:
         count = comb(A, 5) * comb(non_win_count, 1)
-        total_prize += count * PRIZES[3]
+        prize = count * PRIZES[3]
+        if A >= 3:
+            print(f"DEBUG: 中5码(无特): count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第2组：中5码+特码（必须有特码）
+    # 第2组
     if has_special and A >= 5:
         count = comb(A, 5) * comb(non_win_count, 0)
-        total_prize += count * PRIZES[2]
+        prize = count * PRIZES[2]
+        if A >= 3:
+            print(f"DEBUG: 中5码+特: count={count}, prize=${prize}")
+        total_prize += prize
     
-    # 第1组：中6码（无特码）
+    # 第1组
     if A >= 6:
         count = comb(A, 6) * comb(non_win_count, 0)
-        total_prize += count * PRIZES[1]
+        prize = count * PRIZES[1]
+        if A >= 3:
+            print(f"DEBUG: 中6码: count={count}, prize=${prize}")
+        total_prize += prize
+    
+    if A >= 3:
+        print(f"DEBUG: 总奖金=${total_prize}")
+        print(f"{'='*50}\n")
     
     return total_prize
 #----------------
