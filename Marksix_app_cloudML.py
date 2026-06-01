@@ -3497,6 +3497,15 @@ with tab1:
             })
         st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
 #-----
+class MethodAConfig:
+    """方法A配置类，存储所有可调参数"""
+    hot_count = 6
+    cold_count = 1
+    hot_range = (0, 10)
+    hot_temperature = 0.8
+    cold_temperature = 0.8
+    zone_window = 15
+#-----
 def get_method_a_config_from_session():
     """从session_state获取方法A配置"""
     config = MethodAConfig()
@@ -3729,16 +3738,6 @@ sum_predict_method = st.radio(
 st.markdown("---")
 # ===
 # ==================== 方法A：分池评分法 - 配置和辅助函数 ====================
-
-class MethodAConfig:
-    """方法A配置类，存储所有可调参数"""
-    hot_count = 6
-    cold_count = 1
-    hot_range = (0, 10)
-    hot_temperature = 0.8
-    cold_temperature = 0.8
-    zone_window = 15
-
 
 def get_method_a_config_from_session():
     """从session_state获取方法A配置"""
