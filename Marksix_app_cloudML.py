@@ -2556,6 +2556,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             bets = trained_models[model_key]
         
         # 计算最佳匹配的奖金（使用修复后的奖金函数）
+        # 计算最佳匹配的奖金和匹配分数
         best_prize = 0
         best_match_score = 0
         
@@ -2563,10 +2564,20 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             # 使用修复后的奖金计算函数
             prize = calculate_7code_prize(bet['numbers'], test_draw)
             
-            # 计算匹配分数（用于日志）
-            match_count = len(set(bet['numbers'][:6]) & set(test_draw['numbers']))
-            has_special = test_draw.get('special') in bet['numbers'] if test_draw.get('special') else False
-            match_score = match_count + (0.5 if has_special else 0)
+            # 修复：正确计算最高匹配分数（枚举所有7种组合）
+            draw_numbers = set(test_draw['numbers'])
+            draw_special = test_draw.get('special')
+            has_special_global = draw_special is not None and draw_special in bet['numbers']
+            
+            best_combo_match = 0
+            for combo in combinations(bet['numbers'], 6):
+                combo_match = len(set(combo) & draw_numbers)
+                best_combo_match = max(best_combo_match, combo_match)
+            
+            # 匹配分数 = 最高匹配数 + (0.5 if 有特码 and 匹配数>=3)
+            match_score = best_combo_match
+            if has_special_global and best_combo_match >= 3:
+                match_score += 0.5
             
             if prize > best_prize:
                 best_prize = prize
