@@ -4287,7 +4287,7 @@ with st.sidebar:
                 st.success("✅ scikit-learn")
             else:
                 st.error("❌ scikit-learn")
-    ＃－－－－
+    
     with st.expander("📖 六种AI算法对比"):
         st.markdown("""
         | 算法 | 核心原理 | 规律加权 |
