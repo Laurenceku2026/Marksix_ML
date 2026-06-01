@@ -2521,8 +2521,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                                  trend_window: int, test_periods: int, train_window: int,
                                  seed_mode: str, fixed_seed_value: int,
                                  sum_predict_method: str = "移动平均(7期)") -> Optional[Dict]:
-
-    print(f"🔍 回测开始: method={method_key}, num_count={num_count}")                                 
     """
     单方法回测 - 完整修复版
     
@@ -2530,6 +2528,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     1. 使用正确的N码复式奖金计算（支持6-10码）
     2. 使用正确的匹配分数计算
     3. 成本计算：每组成本 = C(num_count, 6) × 5（半注）
+    4. 修复缓存key包含num_count，避免不同号码数的缓存冲突
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2577,7 +2576,8 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         np.random.seed(seed_val)
         
         # 每 retrain_interval 期重新训练一次
-        model_key = f"{method_key}_{i // retrain_interval}"
+        # 修复：缓存key中加入 num_count，避免不同号码数的缓存冲突
+        model_key = f"{method_key}_{num_count}_{i // retrain_interval}"
         
         if model_key not in trained_models:
             if method_key == "方法1":
@@ -2625,13 +2625,12 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         best_match_score = 0
         
         for bet in bets:
-            print(f"DEBUG: bet号码个数 = {len(bet['numbers'])}")  # 添加这行
             # 使用修复后的奖金计算函数
             prize = calculate_7code_prize(bet['numbers'], test_draw)
             
             # 使用修复后的匹配分数计算
             match_score = get_best_match_score(bet['numbers'], test_draw)
-            print(f"DEBUG: prize={prize}, match_score={match_score}")
+            
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
@@ -2639,10 +2638,9 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         # 成本计算（半注）
         total_cost += num_bets * cost_per_bet
         total_prize += best_prize
-        #---------------
+        
         if best_prize > 0:
             win_count += 1
-            # 格式化奖金显示
             # 格式化奖金显示（按金额从大到小排列）
             if best_prize >= 5090000:
                 prize_desc = "509万"
