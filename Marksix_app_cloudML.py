@@ -4177,148 +4177,148 @@ else:
                           seed_mode, fixed_seed_value, sum_predict_method,
                           hot_count=6, cold_count=1, hot_range=(0, 10),
                           hot_temperature=0.8, cold_temperature=0.8, zone_window=15):
-    """方法A回测函数"""
-    if len(draws) < train_window + test_periods:
-        return None
-    
-    method_seed_offset = 50
-    total_cost = 0
-    total_prize = 0
-    win_count = 0
-    prize_details = []
-    
-    from math import comb
-    cost_per_bet = comb(num_count, 6) * 5
-    
-    for i in range(test_periods):
-        train_draws = draws[:-(test_periods - i)]
-        test_draw = draws[-(test_periods - i)]
-        test_period = test_draw.get('period', '')
+        """方法A回测函数"""
+        if len(draws) < train_window + test_periods:
+            return None
         
-        if seed_mode == "date":
-            test_date = test_draw.get('date')
-            if test_date:
-                try:
-                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
-                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
-                    seed_val += method_seed_offset
-                except:
+        method_seed_offset = 50
+        total_cost = 0
+        total_prize = 0
+        win_count = 0
+        prize_details = []
+        
+        from math import comb
+        cost_per_bet = comb(num_count, 6) * 5
+        
+        for i in range(test_periods):
+            train_draws = draws[:-(test_periods - i)]
+            test_draw = draws[-(test_periods - i)]
+            test_period = test_draw.get('period', '')
+            
+            if seed_mode == "date":
+                test_date = test_draw.get('date')
+                if test_date:
+                    try:
+                        dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                        seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
+                        seed_val += method_seed_offset
+                    except:
+                        seed_val = 42 + method_seed_offset + i
+                else:
                     seed_val = 42 + method_seed_offset + i
+            elif seed_mode == "fixed":
+                seed_val = fixed_seed_value + method_seed_offset
             else:
-                seed_val = 42 + method_seed_offset + i
-        elif seed_mode == "fixed":
-            seed_val = fixed_seed_value + method_seed_offset
-        else:
-            seed_val = random.randint(0, 1000000) + method_seed_offset
-        
-        random.seed(seed_val)
-        np.random.seed(seed_val)
-        
-        # 获取加分配置
-        zone_bonus_config = {
-            1: st.session_state.get('zone1_bonus', 8),
-            2: st.session_state.get('zone2_bonus', 5),
-            3: st.session_state.get('zone3_bonus', 3),
-            4: st.session_state.get('zone4_bonus', 0),
-            5: st.session_state.get('zone5_bonus', 0),
-            6: st.session_state.get('zone6_bonus', 0),
-            7: st.session_state.get('zone7_bonus', 0),
-        }
-        
-        pattern_config = {
-            "gap_2": st.session_state.get('pattern_gap2', 15),
-            "gap_3": st.session_state.get('pattern_gap3', 10),
-            "edge_normal": st.session_state.get('pattern_edge_normal', 8),
-            "edge_special": st.session_state.get('pattern_edge_special', 6),
-            "consecutive": st.session_state.get('pattern_consecutive', 5),
-            "alternate": st.session_state.get('pattern_alternate', 5),
-            "max": st.session_state.get('pattern_max', 25),
-        }
-        
-        cold_config = {
-            "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
-            "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
-            "consecutive": st.session_state.get('cold_consecutive', 10),
-            "cold_return": st.session_state.get('cold_return', 8),
-            "cold_neighbor": st.session_state.get('cold_neighbor', 5),
-            "max": st.session_state.get('cold_max', 20),
-        }
-        
-        bets = generate_bets_method_a(
-            train_draws, num_bets, num_count,
-            hot_count=hot_count, cold_count=cold_count,
-            hot_range=hot_range,
-            hot_temperature=hot_temperature,
-            cold_temperature=cold_temperature,
-            zone_window=zone_window,
-            zone_bonus_config=zone_bonus_config,
-            pattern_config=pattern_config,
-            cold_config=cold_config,
-            sum_predict_method=sum_predict_method,
-            random_seed=seed_val
-        )
-        
-        best_prize = 0
-        best_match_score = 0
-        
-        for bet in bets:
-            prize = calculate_7code_prize(bet['numbers'], test_draw)
-            match_score = get_best_match_score(bet['numbers'], test_draw)
+                seed_val = random.randint(0, 1000000) + method_seed_offset
             
-            if prize > best_prize:
-                best_prize = prize
-                best_match_score = match_score
-        
-        total_cost += num_bets * cost_per_bet
-        total_prize += best_prize
-        
-        if best_prize > 0:
-            win_count += 1
-            if best_prize >= 5090000:
-                prize_desc = "509万"
-            elif best_prize >= 1530000:
-                prize_desc = "153万"
-            elif best_prize >= 30800:
-                prize_desc = "3.08万"
-            elif best_prize >= 10560:
-                prize_desc = "10,560"
-            elif best_prize >= 1040:
-                prize_desc = "1,040"
-            elif best_prize >= 4800:
-                prize_desc = "4,800"
-            elif best_prize >= 1600:
-                prize_desc = "1,600"
-            elif best_prize >= 520:
-                prize_desc = "520"
-            elif best_prize >= 320:
-                prize_desc = "320"
-            elif best_prize >= 160:
-                prize_desc = "160"
-            elif best_prize >= 80:
-                prize_desc = "80"
-            else:
-                prize_desc = str(best_prize)
+            random.seed(seed_val)
+            np.random.seed(seed_val)
             
-            if best_match_score == int(best_match_score):
-                match_display = f"{int(best_match_score)}"
-            else:
-                match_display = f"{best_match_score:.1f}"
+            # 获取加分配置
+            zone_bonus_config = {
+                1: st.session_state.get('zone1_bonus', 8),
+                2: st.session_state.get('zone2_bonus', 5),
+                3: st.session_state.get('zone3_bonus', 3),
+                4: st.session_state.get('zone4_bonus', 0),
+                5: st.session_state.get('zone5_bonus', 0),
+                6: st.session_state.get('zone6_bonus', 0),
+                7: st.session_state.get('zone7_bonus', 0),
+            }
             
-            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
-    
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
-    
-    return {
-        "方法": "方法A: 分池评分法",
-        "ROI": roi,
-        "总成本": total_cost,
-        "总奖金": total_prize,
-        "净收益": net,
-        "中奖率": win_rate,
-        "中奖明细": ", ".join(prize_details) if prize_details else "无"
-    }
+            pattern_config = {
+                "gap_2": st.session_state.get('pattern_gap2', 15),
+                "gap_3": st.session_state.get('pattern_gap3', 10),
+                "edge_normal": st.session_state.get('pattern_edge_normal', 8),
+                "edge_special": st.session_state.get('pattern_edge_special', 6),
+                "consecutive": st.session_state.get('pattern_consecutive', 5),
+                "alternate": st.session_state.get('pattern_alternate', 5),
+                "max": st.session_state.get('pattern_max', 25),
+            }
+            
+            cold_config = {
+                "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+                "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+                "consecutive": st.session_state.get('cold_consecutive', 10),
+                "cold_return": st.session_state.get('cold_return', 8),
+                "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+                "max": st.session_state.get('cold_max', 20),
+            }
+            
+            bets = generate_bets_method_a(
+                train_draws, num_bets, num_count,
+                hot_count=hot_count, cold_count=cold_count,
+                hot_range=hot_range,
+                hot_temperature=hot_temperature,
+                cold_temperature=cold_temperature,
+                zone_window=zone_window,
+                zone_bonus_config=zone_bonus_config,
+                pattern_config=pattern_config,
+                cold_config=cold_config,
+                sum_predict_method=sum_predict_method,
+                random_seed=seed_val
+            )
+            
+            best_prize = 0
+            best_match_score = 0
+            
+            for bet in bets:
+                prize = calculate_7code_prize(bet['numbers'], test_draw)
+                match_score = get_best_match_score(bet['numbers'], test_draw)
+                
+                if prize > best_prize:
+                    best_prize = prize
+                    best_match_score = match_score
+            
+            total_cost += num_bets * cost_per_bet
+            total_prize += best_prize
+            
+            if best_prize > 0:
+                win_count += 1
+                if best_prize >= 5090000:
+                    prize_desc = "509万"
+                elif best_prize >= 1530000:
+                    prize_desc = "153万"
+                elif best_prize >= 30800:
+                    prize_desc = "3.08万"
+                elif best_prize >= 10560:
+                    prize_desc = "10,560"
+                elif best_prize >= 1040:
+                    prize_desc = "1,040"
+                elif best_prize >= 4800:
+                    prize_desc = "4,800"
+                elif best_prize >= 1600:
+                    prize_desc = "1,600"
+                elif best_prize >= 520:
+                    prize_desc = "520"
+                elif best_prize >= 320:
+                    prize_desc = "320"
+                elif best_prize >= 160:
+                    prize_desc = "160"
+                elif best_prize >= 80:
+                    prize_desc = "80"
+                else:
+                    prize_desc = str(best_prize)
+                
+                if best_match_score == int(best_match_score):
+                    match_display = f"{int(best_match_score)}"
+                else:
+                    match_display = f"{best_match_score:.1f}"
+                
+                prize_details.append(f"{test_period}({match_display}, {prize_desc})")
+        
+        net = total_prize - total_cost
+        roi = (net / total_cost) * 100 if total_cost > 0 else 0
+        win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
+        
+        return {
+            "方法": "方法A: 分池评分法",
+            "ROI": roi,
+            "总成本": total_cost,
+            "总奖金": total_prize,
+            "净收益": net,
+            "中奖率": win_rate,
+            "中奖明细": ", ".join(prize_details) if prize_details else "无"
+        }
 
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
