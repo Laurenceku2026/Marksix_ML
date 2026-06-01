@@ -1080,73 +1080,61 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
         non_win_count -= 1
     non_win_count = max(0, non_win_count)
     
-    # 只在 A >= 3 时打印详细日志
-    if A >= 3:
-        print(f"\n{'='*50}")
-        print(f"DEBUG: N={N}, A={A}, has_special={has_special}")
-        print(f"DEBUG: non_win_count={non_win_count}")
+    # 详细日志
+    print(f"\n[奖金计算] N={N}, A={A}, has_special={has_special}, non_win_count={non_win_count}")
     
     total_prize = 0
     
-    # 第7组
+    # 第7组：中3码（无特码）
     if A >= 3 and non_win_count >= 3:
         count = comb(A, 3) * comb(non_win_count, 3)
         prize = count * PRIZES[7]
-        if A >= 3:
-            print(f"DEBUG: 中3码(无特): count={count}, prize=${prize}")
+        print(f"  - 中3码(无特): count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第6组
+    # 第6组：中3码+特码
     if has_special and A >= 3 and non_win_count >= 2:
         count = comb(A, 3) * comb(non_win_count, 2)
         prize = count * PRIZES[6]
-        if A >= 3:
-            print(f"DEBUG: 中3码+特: count={count}, prize=${prize}")
+        print(f"  - 中3码+特: count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第5组
+    # 第5组：中4码（无特码）
     if A >= 4 and non_win_count >= 2:
         count = comb(A, 4) * comb(non_win_count, 2)
         prize = count * PRIZES[5]
-        if A >= 3:
-            print(f"DEBUG: 中4码(无特): count={count}, prize=${prize}")
+        print(f"  - 中4码(无特): count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第4组
+    # 第4组：中4码+特码
     if has_special and A >= 4 and non_win_count >= 1:
         count = comb(A, 4) * comb(non_win_count, 1)
         prize = count * PRIZES[4]
-        if A >= 3:
-            print(f"DEBUG: 中4码+特: count={count}, prize=${prize}")
+        print(f"  - 中4码+特: count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第3组
+    # 第3组：中5码（无特码）
     if A >= 5 and non_win_count >= 1:
         count = comb(A, 5) * comb(non_win_count, 1)
         prize = count * PRIZES[3]
-        if A >= 3:
-            print(f"DEBUG: 中5码(无特): count={count}, prize=${prize}")
+        print(f"  - 中5码(无特): count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第2组
+    # 第2组：中5码+特码
     if has_special and A >= 5:
         count = comb(A, 5) * comb(non_win_count, 0)
         prize = count * PRIZES[2]
-        if A >= 3:
-            print(f"DEBUG: 中5码+特: count={count}, prize=${prize}")
+        print(f"  - 中5码+特: count={count}, 奖金=${prize}")
         total_prize += prize
     
-    # 第1组
+    # 第1组：中6码
     if A >= 6:
         count = comb(A, 6) * comb(non_win_count, 0)
         prize = count * PRIZES[1]
-        if A >= 3:
-            print(f"DEBUG: 中6码: count={count}, prize=${prize}")
+        print(f"  - 中6码: count={count}, 奖金=${prize}")
         total_prize += prize
     
-    if A >= 3:
-        print(f"DEBUG: 总奖金=${total_prize}")
-        print(f"{'='*50}\n")
+    print(f"  => 总奖金 = ${total_prize}")
     
     return total_prize
 #----------------
