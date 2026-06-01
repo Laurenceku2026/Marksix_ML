@@ -1079,7 +1079,7 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     N = len(bet_numbers)                     # 复式号码个数
     A = len(set(bet_numbers) & draw_numbers) # 中奖正码个数
     has_special = draw_special is not None and draw_special in bet_numbers
-    
+    print(f"DEBUG: N={N}, A={A}, has_special={has_special}")  # 添加这行
     # 半注奖金表（基于官方派彩规则）
     PRIZES = {
         7: 20,      # 第7组：中3码
