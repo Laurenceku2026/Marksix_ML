@@ -3642,87 +3642,7 @@ def get_method_a_config_from_session():
     config.zone_window = st.session_state.get('method_a_zone_window', 15)
     return config
 
-
-def show_method_a_advanced_settings():
-    """显示方法A的高级设置"""
-    with st.expander("⚙️ 方法A高级设置（可调整评分参数）", expanded=False):
-        st.markdown("**📊 池间分配**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.number_input("热池抽取个数", min_value=4, max_value=6, value=6, step=1, key="method_a_hot_count")
-        with col2:
-            st.number_input("冷池抽取个数", min_value=1, max_value=3, value=1, step=1, key="method_a_cold_count")
-        
-        st.markdown("---")
-        st.markdown("**🔥 热池参数**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
-        with col2:
-            st.number_input("热池遗漏起始", min_value=0, max_value=5, value=0, step=1, key="method_a_hot_range_start")
-            st.number_input("热池遗漏结束", min_value=5, max_value=15, value=10, step=1, key="method_a_hot_range_end")
-        
-        st.markdown("---")
-        st.markdown("**❄️ 冷池参数**")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
-        with col2:
-            st.number_input("冷池遗漏起始", min_value=8, max_value=15, value=11, step=1, key="method_a_cold_range_start")
-        
-        st.markdown("---")
-        st.markdown("**🗺️ 分区热度参数**")
-        st.slider("分区窗口期（期数）", min_value=10, max_value=30, value=15, step=5, key="method_a_zone_window")
-        
-        st.markdown("**分区加分（可自定义）**")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.number_input("第1热区加分", value=8, min_value=0, max_value=20, key="zone1_bonus")
-            st.number_input("第2热区加分", value=5, min_value=0, max_value=20, key="zone2_bonus")
-        with col2:
-            st.number_input("第3热区加分", value=3, min_value=0, max_value=20, key="zone3_bonus")
-            st.number_input("第4热区加分", value=0, min_value=0, max_value=20, key="zone4_bonus")
-        with col3:
-            st.number_input("第5热区加分", value=0, min_value=0, max_value=20, key="zone5_bonus")
-            st.number_input("第6热区加分", value=0, min_value=0, max_value=20, key="zone6_bonus")
-            st.number_input("第7热区加分", value=0, min_value=0, max_value=20, key="zone7_bonus")
-        
-        st.markdown("**📐 规律加分（可自定义）**")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.number_input("夹号-间隔2", value=15, min_value=0, max_value=25, key="pattern_gap2")
-            st.number_input("夹号-间隔3", value=10, min_value=0, max_value=20, key="pattern_gap3")
-        with col2:
-            st.number_input("边号(正码)", value=8, min_value=0, max_value=15, key="pattern_edge_normal")
-            st.number_input("边号(特码)", value=6, min_value=0, max_value=15, key="pattern_edge_special")
-        with col3:
-            st.number_input("连号潜力", value=5, min_value=0, max_value=10, key="pattern_consecutive")
-            st.number_input("隔期模式", value=5, min_value=0, max_value=10, key="pattern_alternate")
-            st.number_input("单号上限", value=25, min_value=15, max_value=35, key="pattern_max")
-        
-        st.markdown("**🔄 冷码专有加分**")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.number_input("频率加速度", value=12, min_value=0, max_value=20, key="cold_freq_acc")
-            st.number_input("遗漏13-15期", value=8, min_value=0, max_value=15, key="cold_miss_13_15")
-        with col2:
-            st.number_input("连续2期出现", value=10, min_value=0, max_value=15, key="cold_consecutive")
-            st.number_input("冷号回补", value=8, min_value=0, max_value=15, key="cold_return")
-        with col3:
-            st.number_input("相邻冷号", value=5, min_value=0, max_value=10, key="cold_neighbor")
-            st.number_input("冷码上限", value=20, min_value=10, max_value=30, key="cold_max")
-        
-        if st.button("恢复默认设置", key="reset_method_a"):
-            for key in list(st.session_state.keys()):
-                if key.startswith("method_a_") or key in ["zone1_bonus", "zone2_bonus", "zone3_bonus", 
-                    "zone4_bonus", "zone5_bonus", "zone6_bonus", "zone7_bonus", "pattern_gap2", "pattern_gap3",
-                    "pattern_edge_normal", "pattern_edge_special", "pattern_consecutive", "pattern_alternate",
-                    "pattern_max", "cold_freq_acc", "cold_miss_13_15", "cold_consecutive", "cold_return",
-                    "cold_neighbor", "cold_max"]:
-                    del st.session_state[key]
-            st.rerun()
-
-
+# ===========
 def generate_method_a_bets_wrapper(draws, num_bets, num_count, random_seed, sum_predict_method):
     """方法A投注生成包装函数"""
     config = get_method_a_config_from_session()
@@ -3770,7 +3690,7 @@ def generate_method_a_bets_wrapper(draws, num_bets, num_count, random_seed, sum_
         random_seed=random_seed
     )
 
-
+# ===========
 def show_method_a_score_details(draws):
     """显示方法A的详细评分信息"""
     st.markdown("### 📊 方法A：分池评分详情")
@@ -3868,6 +3788,86 @@ def show_method_a_score_details(draws):
         for num, score, prob in cold_scores_with_prob[:20]
     ])
     st.dataframe(cold_df, use_container_width=True, hide_index=True)
+# ===========
+def show_method_a_advanced_settings():
+    """显示方法A的高级设置"""
+    with st.expander("⚙️ 方法A高级设置（可调整评分参数）", expanded=False):
+        st.markdown("**📊 池间分配**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.number_input("热池抽取个数", min_value=4, max_value=6, value=6, step=1, key="method_a_hot_count")
+        with col2:
+            st.number_input("冷池抽取个数", min_value=1, max_value=3, value=1, step=1, key="method_a_cold_count")
+        
+        st.markdown("---")
+        st.markdown("**🔥 热池参数**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
+        with col2:
+            st.number_input("热池遗漏起始", min_value=0, max_value=5, value=0, step=1, key="method_a_hot_range_start")
+            st.number_input("热池遗漏结束", min_value=5, max_value=15, value=10, step=1, key="method_a_hot_range_end")
+        
+        st.markdown("---")
+        st.markdown("**❄️ 冷池参数**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
+        with col2:
+            st.number_input("冷池遗漏起始", min_value=8, max_value=15, value=11, step=1, key="method_a_cold_range_start")
+        
+        st.markdown("---")
+        st.markdown("**🗺️ 分区热度参数**")
+        st.slider("分区窗口期（期数）", min_value=10, max_value=30, value=15, step=5, key="method_a_zone_window")
+        
+        st.markdown("**分区加分（可自定义）**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("第1热区加分", value=8, min_value=0, max_value=20, key="zone1_bonus")
+            st.number_input("第2热区加分", value=5, min_value=0, max_value=20, key="zone2_bonus")
+        with col2:
+            st.number_input("第3热区加分", value=3, min_value=0, max_value=20, key="zone3_bonus")
+            st.number_input("第4热区加分", value=0, min_value=0, max_value=20, key="zone4_bonus")
+        with col3:
+            st.number_input("第5热区加分", value=0, min_value=0, max_value=20, key="zone5_bonus")
+            st.number_input("第6热区加分", value=0, min_value=0, max_value=20, key="zone6_bonus")
+            st.number_input("第7热区加分", value=0, min_value=0, max_value=20, key="zone7_bonus")
+        
+        st.markdown("**📐 规律加分（可自定义）**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("夹号-间隔2", value=15, min_value=0, max_value=25, key="pattern_gap2")
+            st.number_input("夹号-间隔3", value=10, min_value=0, max_value=20, key="pattern_gap3")
+        with col2:
+            st.number_input("边号(正码)", value=8, min_value=0, max_value=15, key="pattern_edge_normal")
+            st.number_input("边号(特码)", value=6, min_value=0, max_value=15, key="pattern_edge_special")
+        with col3:
+            st.number_input("连号潜力", value=5, min_value=0, max_value=10, key="pattern_consecutive")
+            st.number_input("隔期模式", value=5, min_value=0, max_value=10, key="pattern_alternate")
+            st.number_input("单号上限", value=25, min_value=15, max_value=35, key="pattern_max")
+        
+        st.markdown("**🔄 冷码专有加分**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("频率加速度", value=12, min_value=0, max_value=20, key="cold_freq_acc")
+            st.number_input("遗漏13-15期", value=8, min_value=0, max_value=15, key="cold_miss_13_15")
+        with col2:
+            st.number_input("连续2期出现", value=10, min_value=0, max_value=15, key="cold_consecutive")
+            st.number_input("冷号回补", value=8, min_value=0, max_value=15, key="cold_return")
+        with col3:
+            st.number_input("相邻冷号", value=5, min_value=0, max_value=10, key="cold_neighbor")
+            st.number_input("冷码上限", value=20, min_value=10, max_value=30, key="cold_max")
+        
+        if st.button("恢复默认设置", key="reset_method_a"):
+            for key in list(st.session_state.keys()):
+                if key.startswith("method_a_") or key in ["zone1_bonus", "zone2_bonus", "zone3_bonus", 
+                    "zone4_bonus", "zone5_bonus", "zone6_bonus", "zone7_bonus", "pattern_gap2", "pattern_gap3",
+                    "pattern_edge_normal", "pattern_edge_special", "pattern_consecutive", "pattern_alternate",
+                    "pattern_max", "cold_freq_acc", "cold_miss_13_15", "cold_consecutive", "cold_return",
+                    "cold_neighbor", "cold_max"]:
+                    del st.session_state[key]
+            st.rerun()
+
 # ==================== 智能投注生成 ====================
 st.subheader("🎲 智能投注生成")
 
