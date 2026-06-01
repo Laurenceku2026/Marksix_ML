@@ -2643,18 +2643,31 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         if best_prize > 0:
             win_count += 1
             # 格式化奖金显示
+            # 格式化奖金显示（按金额从大到小排列）
             if best_prize >= 5090000:
                 prize_desc = "509万"
             elif best_prize >= 1530000:
                 prize_desc = "153万"
             elif best_prize >= 30800:
                 prize_desc = "3.08万"
+            elif best_prize >= 10560:
+                prize_desc = "10,560"
+            elif best_prize >= 1040:
+                prize_desc = "1,040"
             elif best_prize >= 4800:
                 prize_desc = "4,800"
             elif best_prize >= 1600:
                 prize_desc = "1,600"
+            elif best_prize >= 520:
+                prize_desc = "520"
             elif best_prize >= 320:
                 prize_desc = "320"
+            elif best_prize >= 160:
+                prize_desc = "160"
+            elif best_prize >= 80:
+                prize_desc = "80"
+            elif best_prize >= 40:
+                prize_desc = "40"
             else:
                 prize_desc = str(best_prize)
             
