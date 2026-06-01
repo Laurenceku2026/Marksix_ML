@@ -1062,34 +1062,47 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
 # ==================== 回测核心函数 ====================
 def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     """
-    计算7码复式的实际中奖金额
-    bet_numbers: 7个号码的列表
-    draw: 开奖数据，包含 numbers(6个正码) 和 special(特码)
+    计算7码复式的实际中奖金额（半注）
+    
+    7码复式 = C(7,6) = 7注，每注半注$5，总成本$35
+    
+    参数:
+        bet_numbers: 7个号码的列表
+        draw: 开奖数据，包含 numbers(6个正码) 和 special(特码)
+    
+    返回:
+        总奖金（半注）
     """
-    draw_numbers = set(draw['numbers'])
-    draw_special = draw.get('special')
+    draw_numbers = set(draw['numbers'])      # 6个正码
+    draw_special = draw.get('special')       # 特码
     
-    # 只取前6个号码计算正码匹配
-    main_numbers = bet_numbers[:6]
-    hit_count = len(set(main_numbers) & draw_numbers)
-    has_special = draw_special is not None and draw_special in bet_numbers
+    # 半注奖金表
+    # (中正码个数, 是否中特码) -> 奖金
+    PRIZES = {
+        (6, False): 5090000,   # 第1组：6码全中
+        (5, True):  1530000,   # 第2组：5码 + 特码
+        (5, False): 30800,     # 第3组：5码
+        (4, True):  5280,      # 第4组：4码 + 特码
+        (4, False): 520,       # 第5组：4码
+        (3, True):  120,       # 第6组：3码 + 特码
+        (3, False): 40,        # 第7组：3码
+    }
     
-    if hit_count == 6:
-        return 10180000
-    elif hit_count == 5 and has_special:
-        return 3060000
-    elif hit_count == 5:
-        return 61600
-    elif hit_count == 4 and has_special:
-        return 10560
-    elif hit_count == 4:
-        return 1040
-    elif hit_count == 3 and has_special:
-        return 240
-    elif hit_count == 3:
-        return 80
-    else:
-        return 0
+    total_prize = 0
+    
+    # 枚举所有 C(7,6) = 7 种6码组合
+    for combo in combinations(bet_numbers, 6):
+        hit_count = len(set(combo) & draw_numbers)
+        
+        # 特码判断：只要特码在7码中，所有7注都算有特码
+        has_special = draw_special is not None and draw_special in bet_numbers
+        
+        # 只有中3个或以上才有奖金
+        if hit_count >= 3:
+            prize = PRIZES.get((hit_count, has_special), 0)
+            total_prize += prize
+    
+    return total_prize
 
 
 def display_backtest_results(results_df: pd.DataFrame, num_bets: int):
@@ -2449,11 +2462,12 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                                  seed_mode: str, fixed_seed_value: int,
                                  sum_predict_method: str = "移动平均(7期)") -> Optional[Dict]:
     """
-    单方法回测（双色球风格缓存）
+    单方法回测 - 修复版
     
-    优化：
-    - 每10期重新训练一次ML模型
-    - 缓存投注结果
+    修复内容：
+    1. 正确计算7码复式奖金（枚举所有C(7,6)=7种组合）
+    2. 使用半注奖金
+    3. 修正随机种子逻辑
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2465,9 +2479,9 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     win_count = 0
     prize_details = []
     
-    # ========== 双色球风格缓存 ==========
+    # 缓存投注结果（每10期重新训练一次）
     trained_models = {}
-    retrain_interval = 10  # 每10期重新训练一次
+    retrain_interval = 10
     
     for idx in range(test_periods):
         i = idx
@@ -2509,7 +2523,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             elif method_key == "方法4":
                 bets = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
             else:  # 方法5: 综合模式
-                # 方法5：分别调用方法1-4（传入 sum_predict_method）
                 bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
                 bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
                 bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method)
@@ -2542,12 +2555,15 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         else:
             bets = trained_models[model_key]
         
-        # 计算最佳匹配的奖金和中奖数
+        # 计算最佳匹配的奖金（使用修复后的奖金函数）
         best_prize = 0
         best_match_score = 0
         
         for bet in bets:
+            # 使用修复后的奖金计算函数
             prize = calculate_7code_prize(bet['numbers'], test_draw)
+            
+            # 计算匹配分数（用于日志）
             match_count = len(set(bet['numbers'][:6]) & set(test_draw['numbers']))
             has_special = test_draw.get('special') in bet['numbers'] if test_draw.get('special') else False
             match_score = match_count + (0.5 if has_special else 0)
@@ -2556,21 +2572,26 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                 best_prize = prize
                 best_match_score = match_score
         
+        # 成本计算（半注，每组$35）
         total_cost += num_bets * 35
         total_prize += best_prize
         
         if best_prize > 0:
             win_count += 1
-            if best_prize >= 10180000:
-                prize_desc = "1018万"
-            elif best_prize >= 3060000:
-                prize_desc = "306万"
-            elif best_prize >= 61600:
-                prize_desc = "6.16万"
-            elif best_prize >= 10560:
-                prize_desc = "1.056万"
+            if best_prize >= 5090000:
+                prize_desc = "509万"
+            elif best_prize >= 1530000:
+                prize_desc = "153万"
+            elif best_prize >= 30800:
+                prize_desc = "3.08万"
+            elif best_prize >= 5280:
+                prize_desc = "5,280"
+            elif best_prize >= 520:
+                prize_desc = "520"
+            elif best_prize >= 120:
+                prize_desc = "120"
             else:
-                prize_desc = str(best_prize)
+                prize_desc = "40"
             prize_details.append(f"{test_period}({best_match_score:.1f}, {prize_desc})")
     
     net = total_prize - total_cost
