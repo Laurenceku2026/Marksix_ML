@@ -3497,7 +3497,7 @@ with tab1:
 
 with tab2:
     # 方法A分池评分详情
-    show_method_a_score_details()
+    show_method_a_score_details(draws)
 
 st.markdown("---")
 #-----
@@ -3769,7 +3769,7 @@ def generate_method_a_bets_wrapper(draws, num_bets, num_count, random_seed, sum_
     )
 
 
-def show_method_a_score_details():
+def show_method_a_score_details(draws):
     """显示方法A的详细评分信息"""
     st.markdown("### 📊 方法A：分池评分详情")
     
