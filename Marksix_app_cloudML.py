@@ -3496,7 +3496,105 @@ with tab1:
                 '出现次数': zone_hits[z]
             })
         st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
-
+#-----
+def show_method_a_score_details(draws):
+    """显示方法A的详细评分信息"""
+    st.markdown("### 📊 方法A：分池评分详情")
+    
+    if not draws:
+        st.warning("请先加载数据")
+        return
+    
+    config = get_method_a_config_from_session()
+    
+    zone_bonus_config = {
+        1: st.session_state.get('zone1_bonus', 8),
+        2: st.session_state.get('zone2_bonus', 5),
+        3: st.session_state.get('zone3_bonus', 3),
+        4: st.session_state.get('zone4_bonus', 0),
+        5: st.session_state.get('zone5_bonus', 0),
+        6: st.session_state.get('zone6_bonus', 0),
+        7: st.session_state.get('zone7_bonus', 0),
+    }
+    
+    pattern_config = {
+        "gap_2": st.session_state.get('pattern_gap2', 15),
+        "gap_3": st.session_state.get('pattern_gap3', 10),
+        "edge_normal": st.session_state.get('pattern_edge_normal', 8),
+        "edge_special": st.session_state.get('pattern_edge_special', 6),
+        "consecutive": st.session_state.get('pattern_consecutive', 5),
+        "alternate": st.session_state.get('pattern_alternate', 5),
+        "max": st.session_state.get('pattern_max', 25),
+    }
+    
+    cold_config = {
+        "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+        "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+        "consecutive": st.session_state.get('cold_consecutive', 10),
+        "cold_return": st.session_state.get('cold_return', 8),
+        "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+        "max": st.session_state.get('cold_max', 20),
+    }
+    
+    with st.spinner("计算评分中..."):
+        details = get_method_a_score_details(
+            draws,
+            hot_range=config.hot_range,
+            zone_window=config.zone_window,
+            zone_bonus_config=zone_bonus_config,
+            pattern_config=pattern_config,
+            cold_config=cold_config,
+            hot_temperature=config.hot_temperature,
+            cold_temperature=config.cold_temperature
+        )
+    
+    st.info(f"🎯 当前池间分配: 热池{config.hot_count}个 + 冷池{config.cold_count}个")
+    
+    st.markdown("---")
+    st.markdown("### 🗺️ 当前热区7分区")
+    
+    zone_data = []
+    for zone in range(1, 8):
+        zone_name = f"{chr(64+zone)}区"
+        zone_range = f"{get_zone_numbers(zone)[0]:02d}-{get_zone_numbers(zone)[-1]:02d}"
+        count = details['zone_counts'][zone]
+        rank = details['zone_rank'][zone]
+        bonus = zone_bonus_config.get(rank, 0)
+        zone_data.append({
+            "分区": zone_name,
+            "范围": zone_range,
+            "出现次数": count,
+            "排名": f"第{rank}热区" if rank <= 3 else f"第{rank}区",
+            "当前加分": f"+{bonus}" if bonus > 0 else "0"
+        })
+    st.dataframe(pd.DataFrame(zone_data), use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("### 🔥 热池Top20（遗漏0-10期）")
+    
+    hot_scores_with_prob = [(num, details['scores'][num], details['hot_probs'].get(num, 0)) 
+                            for num in details['hot_pool']]
+    hot_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+    
+    hot_df = pd.DataFrame([
+        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
+        for num, score, prob in hot_scores_with_prob[:20]
+    ])
+    st.dataframe(hot_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("### ❄️ 冷池Top20（遗漏>10期）")
+    
+    cold_scores_with_prob = [(num, details['scores'][num], details['cold_probs'].get(num, 0)) 
+                            for num in details['cold_pool']]
+    cold_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+    
+    cold_df = pd.DataFrame([
+        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
+        for num, score, prob in cold_scores_with_prob[:20]
+    ])
+    st.dataframe(cold_df, use_container_width=True, hide_index=True)
+#-----
 with tab2:
     # 方法A分池评分详情
     show_method_a_score_details(draws)
@@ -3691,103 +3789,6 @@ def generate_method_a_bets_wrapper(draws, num_bets, num_count, random_seed, sum_
     )
 
 # ===========
-def show_method_a_score_details(draws):
-    """显示方法A的详细评分信息"""
-    st.markdown("### 📊 方法A：分池评分详情")
-    
-    if not draws:
-        st.warning("请先加载数据")
-        return
-    
-    config = get_method_a_config_from_session()
-    
-    zone_bonus_config = {
-        1: st.session_state.get('zone1_bonus', 8),
-        2: st.session_state.get('zone2_bonus', 5),
-        3: st.session_state.get('zone3_bonus', 3),
-        4: st.session_state.get('zone4_bonus', 0),
-        5: st.session_state.get('zone5_bonus', 0),
-        6: st.session_state.get('zone6_bonus', 0),
-        7: st.session_state.get('zone7_bonus', 0),
-    }
-    
-    pattern_config = {
-        "gap_2": st.session_state.get('pattern_gap2', 15),
-        "gap_3": st.session_state.get('pattern_gap3', 10),
-        "edge_normal": st.session_state.get('pattern_edge_normal', 8),
-        "edge_special": st.session_state.get('pattern_edge_special', 6),
-        "consecutive": st.session_state.get('pattern_consecutive', 5),
-        "alternate": st.session_state.get('pattern_alternate', 5),
-        "max": st.session_state.get('pattern_max', 25),
-    }
-    
-    cold_config = {
-        "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
-        "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
-        "consecutive": st.session_state.get('cold_consecutive', 10),
-        "cold_return": st.session_state.get('cold_return', 8),
-        "cold_neighbor": st.session_state.get('cold_neighbor', 5),
-        "max": st.session_state.get('cold_max', 20),
-    }
-    
-    with st.spinner("计算评分中..."):
-        details = get_method_a_score_details(
-            draws,
-            hot_range=config.hot_range,
-            zone_window=config.zone_window,
-            zone_bonus_config=zone_bonus_config,
-            pattern_config=pattern_config,
-            cold_config=cold_config,
-            hot_temperature=config.hot_temperature,
-            cold_temperature=config.cold_temperature
-        )
-    
-    st.info(f"🎯 当前池间分配: 热池{config.hot_count}个 + 冷池{config.cold_count}个")
-    
-    st.markdown("---")
-    st.markdown("### 🗺️ 当前热区7分区")
-    
-    zone_data = []
-    for zone in range(1, 8):
-        zone_name = f"{chr(64+zone)}区"
-        zone_range = f"{get_zone_numbers(zone)[0]:02d}-{get_zone_numbers(zone)[-1]:02d}"
-        count = details['zone_counts'][zone]
-        rank = details['zone_rank'][zone]
-        bonus = zone_bonus_config.get(rank, 0)
-        zone_data.append({
-            "分区": zone_name,
-            "范围": zone_range,
-            "出现次数": count,
-            "排名": f"第{rank}热区" if rank <= 3 else f"第{rank}区",
-            "当前加分": f"+{bonus}" if bonus > 0 else "0"
-        })
-    st.dataframe(pd.DataFrame(zone_data), use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    st.markdown("### 🔥 热池Top20（遗漏0-10期）")
-    
-    hot_scores_with_prob = [(num, details['scores'][num], details['hot_probs'].get(num, 0)) 
-                            for num in details['hot_pool']]
-    hot_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
-    
-    hot_df = pd.DataFrame([
-        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
-        for num, score, prob in hot_scores_with_prob[:20]
-    ])
-    st.dataframe(hot_df, use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    st.markdown("### ❄️ 冷池Top20（遗漏>10期）")
-    
-    cold_scores_with_prob = [(num, details['scores'][num], details['cold_probs'].get(num, 0)) 
-                            for num in details['cold_pool']]
-    cold_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
-    
-    cold_df = pd.DataFrame([
-        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
-        for num, score, prob in cold_scores_with_prob[:20]
-    ])
-    st.dataframe(cold_df, use_container_width=True, hide_index=True)
 # ===========
 def show_method_a_advanced_settings():
     """显示方法A的高级设置"""
