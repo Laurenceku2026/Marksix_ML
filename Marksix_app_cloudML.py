@@ -1062,49 +1062,109 @@ def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
 # ==================== 回测核心函数 ====================
 def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     """
-    计算7码复式的实际中奖金额（半注）
-    
-    7码复式 = C(7,6) = 7注，每注半注$5，总成本$35
+    计算N码复式的实际中奖金额（半注）
+    支持6-10码复式
     
     参数:
-        bet_numbers: 7个号码的列表
+        bet_numbers: N个号码的列表（N >= 6）
         draw: 开奖数据，包含 numbers(6个正码) 和 special(特码)
     
     返回:
         总奖金（半注）
     """
+    from math import comb
+    
     draw_numbers = set(draw['numbers'])      # 6个正码
     draw_special = draw.get('special')       # 特码
     
+    N = len(bet_numbers)                     # 复式号码个数
+    A = len(set(bet_numbers) & draw_numbers) # 中奖正码个数
+    has_special = draw_special is not None and draw_special in bet_numbers
+    
     # 半注奖金表
-    # (中正码个数, 是否中特码) -> 奖金
     PRIZES = {
-        (6, False): 5090000,   # 第1组：6码全中
-        (5, True):  1530000,   # 第2组：5码 + 特码
-        (5, False): 30800,     # 第3组：5码
-        (4, True):  5280,      # 第4组：4码 + 特码
-        (4, False): 520,       # 第5组：4码
-        (3, True):  120,       # 第6组：3码 + 特码
-        (3, False): 40,        # 第7组：3码
+        7: 20,      # 第7组：中3码
+        6: 160,     # 第6组：中3码+特码
+        5: 320,     # 第5组：中4码
+        4: 4800,    # 第4组：中4码+特码
+        3: 30800,   # 第3组：中5码
+        2: 1530000, # 第2组：中5码+特码
+        1: 5090000, # 第1组：中6码
     }
+    
+    # 特码在N码中时，非中奖号码个数要减1（特码占用一个位置）
+    non_win_count = N - A
+    if has_special:
+        non_win_count -= 1
+    
+    # 确保非中奖数量不为负数
+    non_win_count = max(0, non_win_count)
     
     total_prize = 0
     
-    # 枚举所有 C(7,6) = 7 种6码组合
-    for combo in combinations(bet_numbers, 6):
-        hit_count = len(set(combo) & draw_numbers)
-        
-        # 特码判断：只要特码在7码中，所有7注都算有特码
-        has_special = draw_special is not None and draw_special in bet_numbers
-        
-        # 只有中3个或以上才有奖金
-        if hit_count >= 3:
-            prize = PRIZES.get((hit_count, has_special), 0)
-            total_prize += prize
+    # 第7组：中3码（无特码）
+    if A >= 3 and non_win_count >= 3:
+        count = comb(A, 3) * comb(non_win_count, 3)
+        total_prize += count * PRIZES[7]
+    
+    # 第6组：中3码+特码（必须有特码）
+    if has_special and A >= 3 and non_win_count >= 2:
+        count = comb(A, 3) * comb(non_win_count, 2)
+        total_prize += count * PRIZES[6]
+    
+    # 第5组：中4码（无特码）
+    if A >= 4 and non_win_count >= 2:
+        count = comb(A, 4) * comb(non_win_count, 2)
+        total_prize += count * PRIZES[5]
+    
+    # 第4组：中4码+特码（必须有特码）
+    if has_special and A >= 4 and non_win_count >= 1:
+        count = comb(A, 4) * comb(non_win_count, 1)
+        total_prize += count * PRIZES[4]
+    
+    # 第3组：中5码（无特码）
+    if A >= 5 and non_win_count >= 1:
+        count = comb(A, 5) * comb(non_win_count, 1)
+        total_prize += count * PRIZES[3]
+    
+    # 第2组：中5码+特码（必须有特码）
+    if has_special and A >= 5:
+        count = comb(A, 5) * comb(non_win_count, 0)
+        total_prize += count * PRIZES[2]
+    
+    # 第1组：中6码（无特码）
+    if A >= 6:
+        count = comb(A, 6) * comb(non_win_count, 0)
+        total_prize += count * PRIZES[1]
     
     return total_prize
-
-
+#----------------
+def get_best_match_score(bet_numbers: List[int], draw: Dict) -> float:
+    """
+    获取N码复式中最好的匹配分数（用于日志显示）
+    
+    返回:
+        最佳匹配分数，如 3.0（中3码）, 3.5（中3+特）, 4.0（中4码）等
+    """
+    draw_numbers = set(draw['numbers'])
+    draw_special = draw.get('special')
+    
+    N = len(bet_numbers)
+    best_score = 0
+    
+    # 枚举所有C(N,6)种6码组合（对于大N可能较慢，但N≤10，最多C(10,6)=210种）
+    for combo in combinations(bet_numbers, 6):
+        match_count = len(set(combo) & draw_numbers)
+        has_special_in_combo = draw_special is not None and draw_special in combo
+        
+        score = match_count
+        if has_special_in_combo and match_count >= 3:
+            score += 0.5
+        
+        best_score = max(best_score, score)
+    
+    return best_score
+#----------------
 def display_backtest_results(results_df: pd.DataFrame, num_bets: int):
     """显示回测结果"""
     st.markdown("### 📊 回测结果")
@@ -2462,12 +2522,12 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                                  seed_mode: str, fixed_seed_value: int,
                                  sum_predict_method: str = "移动平均(7期)") -> Optional[Dict]:
     """
-    单方法回测 - 修复版
+    单方法回测 - 完整修复版
     
     修复内容：
-    1. 正确计算7码复式奖金（枚举所有C(7,6)=7种组合）
-    2. 使用半注奖金
-    3. 修正随机种子逻辑
+    1. 使用正确的N码复式奖金计算（支持6-10码）
+    2. 使用正确的匹配分数计算
+    3. 成本计算：每组成本 = C(num_count, 6) × 5（半注）
     """
     if len(draws) < train_window + test_periods:
         return None
@@ -2482,6 +2542,10 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     # 缓存投注结果（每10期重新训练一次）
     trained_models = {}
     retrain_interval = 10
+    
+    # 计算每组成本（半注）
+    from math import comb
+    cost_per_bet = comb(num_count, 6) * 5  # C(N,6) × $5
     
     for idx in range(test_periods):
         i = idx
@@ -2533,7 +2597,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
                 for bet in bets1 + bets2 + bets3 + bets4:
                     all_numbers.extend(bet['numbers'])
                 
-                from collections import Counter
                 freq_counter = Counter(all_numbers)
                 top_numbers = [num for num, _ in freq_counter.most_common(num_count)]
                 
@@ -2555,7 +2618,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         else:
             bets = trained_models[model_key]
         
-        # 计算最佳匹配的奖金（使用修复后的奖金函数）
         # 计算最佳匹配的奖金和匹配分数
         best_prize = 0
         best_match_score = 0
@@ -2564,46 +2626,42 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             # 使用修复后的奖金计算函数
             prize = calculate_7code_prize(bet['numbers'], test_draw)
             
-            # 修复：正确计算最高匹配分数（枚举所有7种组合）
-            draw_numbers = set(test_draw['numbers'])
-            draw_special = test_draw.get('special')
-            has_special_global = draw_special is not None and draw_special in bet['numbers']
-            
-            best_combo_match = 0
-            for combo in combinations(bet['numbers'], 6):
-                combo_match = len(set(combo) & draw_numbers)
-                best_combo_match = max(best_combo_match, combo_match)
-            
-            # 匹配分数 = 最高匹配数 + (0.5 if 有特码 and 匹配数>=3)
-            match_score = best_combo_match
-            if has_special_global and best_combo_match >= 3:
-                match_score += 0.5
+            # 使用修复后的匹配分数计算
+            match_score = get_best_match_score(bet['numbers'], test_draw)
             
             if prize > best_prize:
                 best_prize = prize
                 best_match_score = match_score
         
-        # 成本计算（半注，每组$35）
-        total_cost += num_bets * 35
+        # 成本计算（半注）
+        total_cost += num_bets * cost_per_bet
         total_prize += best_prize
         
         if best_prize > 0:
             win_count += 1
+            # 格式化奖金显示
             if best_prize >= 5090000:
                 prize_desc = "509万"
             elif best_prize >= 1530000:
                 prize_desc = "153万"
             elif best_prize >= 30800:
                 prize_desc = "3.08万"
-            elif best_prize >= 5280:
-                prize_desc = "5,280"
-            elif best_prize >= 520:
-                prize_desc = "520"
-            elif best_prize >= 120:
-                prize_desc = "120"
+            elif best_prize >= 4800:
+                prize_desc = "4,800"
+            elif best_prize >= 1600:
+                prize_desc = "1,600"
+            elif best_prize >= 320:
+                prize_desc = "320"
             else:
-                prize_desc = "40"
-            prize_details.append(f"{test_period}({best_match_score:.1f}, {prize_desc})")
+                prize_desc = str(best_prize)
+            
+            # 格式化匹配分数显示
+            if best_match_score == int(best_match_score):
+                match_display = f"{int(best_match_score)}"
+            else:
+                match_display = f"{best_match_score:.1f}"
+            
+            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
     
     net = total_prize - total_cost
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
