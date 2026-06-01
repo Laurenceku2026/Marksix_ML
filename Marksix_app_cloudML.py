@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional, Any
 from collections import Counter
 from itertools import combinations
+from math import comb
 import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
