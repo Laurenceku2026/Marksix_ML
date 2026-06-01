@@ -780,7 +780,657 @@ def get_latest_and_oldest(draws: List[Dict]) -> Tuple[Dict, Dict]:
     """获取最新和最旧期次"""
     sorted_draws = get_sorted_draws(draws)
     return sorted_draws[-1], sorted_draws[0] if sorted_draws else ({}, {})
+# =====
+# ==================== 方法A：分池评分法 - 核心评分函数 ====================
 
+from math import comb
+from collections import Counter
+import numpy as np
+import random
+
+# ==================== 1. 辅助函数 ====================
+
+def get_zone(num: int) -> int:
+    """获取号码所在分区（1-7）"""
+    return (num - 1) // 7 + 1
+
+
+def get_zone_numbers(zone: int) -> list:
+    """获取指定分区的所有号码"""
+    start = (zone - 1) * 7 + 1
+    end = start + 6
+    return list(range(start, end + 1))
+
+
+def calculate_absence(num: int, draws: list) -> int:
+    """计算号码当前遗漏期数"""
+    absence = 0
+    for draw in reversed(draws):
+        if num in draw['numbers']:
+            break
+        absence += 1
+    return absence
+
+
+# ==================== 2. 基础分（基于遗漏期数） ====================
+
+def get_base_score(absence: int, hot_range: tuple = (0, 10)) -> int:
+    """
+    获取基础分
+    hot_range: (min, max) 热池遗漏范围，默认0-10期
+    """
+    hot_min, hot_max = hot_range
+    if hot_min <= absence <= hot_max:
+        return 50  # 热池基础分
+    else:
+        return 20  # 冷池基础分
+
+
+# ==================== 3. 分区热度计算 ====================
+
+def get_zone_rank(num: int, draws: list, window: int = 15) -> int:
+    """
+    获取号码所在分区的热度排名（1-7）
+    window: 计算热区使用的期数，默认15期
+    """
+    zone = get_zone(num)
+    
+    # 计算最近window期各分区出现次数
+    zone_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0}
+    for draw in draws[-window:]:
+        for n in draw['numbers']:
+            zone_counts[get_zone(n)] += 1
+    
+    # 排序获取排名
+    sorted_zones = sorted(zone_counts.items(), key=lambda x: x[1], reverse=True)
+    rank = [z for z, _ in sorted_zones].index(zone) + 1
+    return rank
+
+
+def get_zone_bonus(zone_rank: int, bonus_config: dict = None) -> int:
+    """
+    获取分区加分
+    bonus_config: 自定义加分配置，默认：
+        {1: 8, 2: 5, 3: 3, 4: 0, 5: 0, 6: 0, 7: 0}
+    """
+    if bonus_config is None:
+        bonus_config = {1: 8, 2: 5, 3: 3, 4: 0, 5: 0, 6: 0, 7: 0}
+    return bonus_config.get(zone_rank, 0)
+
+
+# ==================== 4. 规律加分 ====================
+
+def is_gap_2(num: int, last_reds: list) -> bool:
+    """夹号-间隔2：上期两码相差2，中间那个"""
+    last_reds_sorted = sorted(last_reds)
+    for i in range(len(last_reds_sorted) - 1):
+        left = last_reds_sorted[i]
+        right = last_reds_sorted[i + 1]
+        if right - left == 2 and num == left + 1:
+            return True
+    return False
+
+
+def is_gap_3(num: int, last_reds: list) -> bool:
+    """夹号-间隔3：上期两码相差3，中间两个"""
+    last_reds_sorted = sorted(last_reds)
+    for i in range(len(last_reds_sorted) - 1):
+        left = last_reds_sorted[i]
+        right = last_reds_sorted[i + 1]
+        if right - left == 3 and (num == left + 1 or num == left + 2):
+            return True
+    return False
+
+
+def is_edge_to_normal(num: int, last_reds: list) -> bool:
+    """边号-正码：与上期正码相差1"""
+    for red in last_reds:
+        if abs(num - red) == 1:
+            return True
+    return False
+
+
+def is_edge_to_special(num: int, last_special: int) -> bool:
+    """边号-特码：与上期特码相差1"""
+    return last_special is not None and abs(num - last_special) == 1
+
+
+def has_consecutive_potential(num: int, last_reds: list) -> bool:
+    """连号潜力：上期连号向两端延伸"""
+    last_reds_sorted = sorted(last_reds)
+    for i in range(len(last_reds_sorted) - 1):
+        if last_reds_sorted[i + 1] - last_reds_sorted[i] == 1:
+            left_end = last_reds_sorted[i] - 1
+            right_end = last_reds_sorted[i + 1] + 1
+            if num == left_end or num == right_end:
+                return True
+    return False
+
+
+def is_alternate_pattern(num: int, draws: list) -> bool:
+    """隔期模式：与上上期号码重复"""
+    if len(draws) < 2:
+        return False
+    last_last_draw = draws[-2]
+    return num in last_last_draw['numbers']
+
+
+def get_pattern_bonus(num: int, last_reds: list, last_special: int, draws: list,
+                      pattern_config: dict = None) -> int:
+    """
+    计算规律加分总和
+    pattern_config: 自定义规律加分配置，默认：
+        {
+            "gap_2": 15,
+            "gap_3": 10,
+            "edge_normal": 8,
+            "edge_special": 6,
+            "consecutive": 5,
+            "alternate": 5,
+            "max": 25
+        }
+    """
+    if pattern_config is None:
+        pattern_config = {
+            "gap_2": 15,
+            "gap_3": 10,
+            "edge_normal": 8,
+            "edge_special": 6,
+            "consecutive": 5,
+            "alternate": 5,
+            "max": 25
+        }
+    
+    bonus = 0
+    
+    # 夹号-间隔2（最强）
+    if is_gap_2(num, last_reds):
+        bonus += pattern_config["gap_2"]
+    # 夹号-间隔3（次强）
+    elif is_gap_3(num, last_reds):
+        bonus += pattern_config["gap_3"]
+    
+    # 正码边号
+    if is_edge_to_normal(num, last_reds):
+        bonus += pattern_config["edge_normal"]
+    
+    # 特码边号
+    if is_edge_to_special(num, last_special):
+        bonus += pattern_config["edge_special"]
+    
+    # 连号潜力
+    if has_consecutive_potential(num, last_reds):
+        bonus += pattern_config["consecutive"]
+    
+    # 隔期模式
+    if is_alternate_pattern(num, draws):
+        bonus += pattern_config["alternate"]
+    
+    return min(bonus, pattern_config["max"])
+
+
+# ==================== 5. 冷码专有加分 ====================
+
+def has_frequency_acceleration(num: int, draws: list, window: int = 10) -> bool:
+    """
+    频率加速度：最近5期出现次数 > 前5期的平均值
+    """
+    if len(draws) < window:
+        return False
+    
+    # 最近5期出现次数
+    recent_5 = 0
+    for draw in draws[-5:]:
+        if num in draw['numbers']:
+            recent_5 += 1
+    
+    # 前5期出现次数
+    prev_5 = 0
+    for draw in draws[-10:-5]:
+        if num in draw['numbers']:
+            prev_5 += 1
+    
+    return recent_5 > prev_5
+
+
+def has_consecutive_cold_appearance(num: int, draws: list) -> bool:
+    """冷码连续2期出现"""
+    if len(draws) < 2:
+        return False
+    return num in draws[-1]['numbers'] and num in draws[-2]['numbers']
+
+
+def is_cold_return(num: int, draws: list, absence: int) -> bool:
+    """冷号回补：遗漏超过20期后首次可能出现"""
+    return absence >= 20 and num not in draws[-1]['numbers']
+
+
+def has_cold_neighbor(num: int, draws: list) -> bool:
+    """相邻冷号：与另一个冷号相邻（±1）"""
+    last_draw = draws[-1]
+    for n in last_draw['numbers']:
+        if abs(num - n) == 1:
+            return True
+    return False
+
+
+def get_cold_bonus(num: int, draws: list, absence: int,
+                   cold_config: dict = None) -> int:
+    """
+    计算冷码专有加分（仅对冷池生效）
+    cold_config: 自定义冷码加分配置，默认：
+        {
+            "frequency_acceleration": 12,
+            "miss_13_15": 8,
+            "consecutive": 10,
+            "cold_return": 8,
+            "cold_neighbor": 5,
+            "max": 20
+        }
+    """
+    # 只对冷码（遗漏>10期）生效
+    if absence <= 10:
+        return 0
+    
+    if cold_config is None:
+        cold_config = {
+            "frequency_acceleration": 12,
+            "miss_13_15": 8,
+            "consecutive": 10,
+            "cold_return": 8,
+            "cold_neighbor": 5,
+            "max": 20
+        }
+    
+    bonus = 0
+    
+    # 频率加速度
+    if has_frequency_acceleration(num, draws):
+        bonus += cold_config["frequency_acceleration"]
+    
+    # 遗漏13-15期
+    if 13 <= absence <= 15:
+        bonus += cold_config["miss_13_15"]
+    
+    # 连续2期出现
+    if has_consecutive_cold_appearance(num, draws):
+        bonus += cold_config["consecutive"]
+    
+    # 冷号回补
+    if is_cold_return(num, draws, absence):
+        bonus += cold_config["cold_return"]
+    
+    # 相邻冷号
+    if has_cold_neighbor(num, draws):
+        bonus += cold_config["cold_neighbor"]
+    
+    return min(bonus, cold_config["max"])
+
+
+# ==================== 6. 综合评分函数 ====================
+
+def calculate_method_a_score(num: int, draws: list, 
+                              hot_range: tuple = (0, 10),
+                              zone_window: int = 15,
+                              zone_bonus_config: dict = None,
+                              pattern_config: dict = None,
+                              cold_config: dict = None) -> int:
+    """
+    方法A综合评分函数
+    
+    参数:
+        num: 要计算的号码
+        draws: 历史开奖数据
+        hot_range: 热池遗漏范围，默认(0, 10)
+        zone_window: 分区窗口期，默认15期
+        zone_bonus_config: 分区加分配置
+        pattern_config: 规律加分配置
+        cold_config: 冷码专有加分配置
+    
+    返回:
+        综合评分
+    """
+    # 1. 计算遗漏期数
+    absence = calculate_absence(num, draws)
+    
+    # 2. 基础分
+    base_score = get_base_score(absence, hot_range)
+    
+    # 3. 分区加分
+    zone_rank = get_zone_rank(num, draws, zone_window)
+    zone_bonus = get_zone_bonus(zone_rank, zone_bonus_config)
+    
+    # 4. 规律加分
+    last_draw = draws[-1]
+    last_reds = last_draw['numbers']
+    last_special = last_draw.get('special')
+    pattern_bonus = get_pattern_bonus(num, last_reds, last_special, draws, pattern_config)
+    
+    # 5. 冷码专有加分
+    cold_bonus = get_cold_bonus(num, draws, absence, cold_config)
+    
+    # 6. 综合评分
+    total_score = base_score + zone_bonus + pattern_bonus + cold_bonus
+    
+    return total_score
+# =====
+# ==================== 方法A：分池评分法 - Softmax抽取与分池抽选 ====================
+
+# ==================== 7. Softmax概率计算 ====================
+
+def softmax_select(pool: List[int], scores: Dict[int, int], temperature: float = 0.8) -> int:
+    """
+    Softmax概率抽取单个号码
+    
+    参数:
+        pool: 候选号码列表
+        scores: 所有号码的评分字典
+        temperature: 温度参数，默认0.8
+    
+    返回:
+        被选中的号码
+    """
+    if not pool:
+        return 0
+    
+    # 获取候选号码的分数列表
+    score_list = [scores.get(num, 20) for num in pool]
+    
+    # 计算exp值
+    exp_scores = np.exp(np.array(score_list) / temperature)
+    
+    # 计算概率
+    probs = exp_scores / np.sum(exp_scores)
+    
+    # 按概率抽取
+    selected = np.random.choice(pool, p=probs)
+    return int(selected)
+
+
+def select_numbers_from_pool(pool: List[int], scores: Dict[int, int], 
+                              count: int, temperature: float = 0.8) -> List[int]:
+    """
+    从池中抽取指定数量的号码（不放回）
+    
+    参数:
+        pool: 候选号码列表
+        scores: 所有号码的评分字典
+        count: 需要抽取的号码个数
+        temperature: 温度参数
+    
+    返回:
+        被选中的号码列表（已排序）
+    """
+    if count <= 0:
+        return []
+    
+    selected = []
+    temp_pool = pool.copy()
+    
+    for _ in range(count):
+        if not temp_pool:
+            break
+        num = softmax_select(temp_pool, scores, temperature)
+        selected.append(num)
+        temp_pool.remove(num)
+    
+    return sorted(selected)
+
+
+# ==================== 8. 池子划分 ====================
+
+def split_pools_by_absence(draws: List[Dict], hot_range: tuple = (0, 10)) -> tuple:
+    """
+    根据遗漏期数划分热池和冷池
+    
+    参数:
+        draws: 历史开奖数据
+        hot_range: 热池遗漏范围，默认(0, 10)
+    
+    返回:
+        (hot_pool, cold_pool) 热池和冷池的号码列表
+    """
+    hot_min, hot_max = hot_range
+    hot_pool = []
+    cold_pool = []
+    
+    for num in range(1, 50):
+        absence = calculate_absence(num, draws)
+        if hot_min <= absence <= hot_max:
+            hot_pool.append(num)
+        else:
+            cold_pool.append(num)
+    
+    return hot_pool, cold_pool
+
+
+# ==================== 9. 批量计算评分 ====================
+
+def calculate_all_scores(draws: List[Dict], 
+                         hot_range: tuple = (0, 10),
+                         zone_window: int = 15,
+                         zone_bonus_config: dict = None,
+                         pattern_config: dict = None,
+                         cold_config: dict = None) -> Dict[int, int]:
+    """
+    计算所有49个号码的综合评分
+    
+    返回:
+        字典 {号码: 评分}
+    """
+    scores = {}
+    for num in range(1, 50):
+        score = calculate_method_a_score(
+            num, draws, hot_range, zone_window, 
+            zone_bonus_config, pattern_config, cold_config
+        )
+        scores[num] = score
+    return scores
+
+
+# ==================== 10. 和值目标获取 ====================
+
+def get_sum_target_for_method_a(draws: List[Dict], num_count: int, 
+                                 sum_predict_method: str = "移动平均(7期)") -> int:
+    """
+    获取方法A的和值目标（复用现有app的和值预测方法）
+    
+    参数:
+        draws: 历史开奖数据
+        num_count: 号码个数（7）
+        sum_predict_method: 和值预测方法
+    
+    返回:
+        和值目标
+    """
+    if sum_predict_method == "均值回归":
+        lower, upper = get_target_sum_mean_reversion_range(draws, num_count)
+    elif sum_predict_method == "移动平均(7期)":
+        lower, upper = get_target_sum_moving_average_range(draws)
+    else:  # 正弦拟合
+        lower, upper = get_target_sum_sine_range(draws)
+    
+    return random.randint(lower, upper)
+
+
+# ==================== 11. 和值筛选 ====================
+
+def is_sum_valid(numbers: List[int], target_sum: int, tolerance: int = 17) -> bool:
+    """检查组合和值是否在目标范围内"""
+    total = sum(numbers)
+    return abs(total - target_sum) <= tolerance
+
+
+# ==================== 12. 方法A主函数：生成投注 ====================
+
+def generate_bets_method_a(draws: List[Dict], num_bets: int, num_count: int = 7,
+                           hot_count: int = 6, cold_count: int = 1,
+                           hot_range: tuple = (0, 10),
+                           hot_temperature: float = 0.8,
+                           cold_temperature: float = 0.8,
+                           zone_window: int = 15,
+                           zone_bonus_config: dict = None,
+                           pattern_config: dict = None,
+                           cold_config: dict = None,
+                           sum_predict_method: str = "移动平均(7期)",
+                           random_seed: Optional[int] = None) -> List[Dict]:
+    """
+    方法A：分池评分法 - 生成投注
+    
+    参数:
+        draws: 历史开奖数据
+        num_bets: 生成组数
+        num_count: 每注号码个数（固定7）
+        hot_count: 热池抽取个数（默认6）
+        cold_count: 冷池抽取个数（默认1）
+        hot_range: 热池遗漏范围（默认0-10期）
+        hot_temperature: 热池温度（默认0.8）
+        cold_temperature: 冷池温度（默认0.8）
+        zone_window: 分区窗口期（默认15期）
+        zone_bonus_config: 分区加分配置
+        pattern_config: 规律加分配置
+        cold_config: 冷码加分配置
+        sum_predict_method: 和值预测方法
+        random_seed: 随机种子
+    
+    返回:
+        投注列表
+    """
+    # 设置随机种子
+    if random_seed is not None:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+    
+    # 计算所有号码的评分
+    all_scores = calculate_all_scores(
+        draws, hot_range, zone_window, 
+        zone_bonus_config, pattern_config, cold_config
+    )
+    
+    # 划分池子
+    hot_pool, cold_pool = split_pools_by_absence(draws, hot_range)
+    
+    bets = []
+    base_target = get_target_sum_by_numbers_count(num_count)
+    
+    for i in range(num_bets):
+        # 每注独立生成和值目标
+        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
+        tolerance = 17  # 默认容差
+        
+        # 尝试生成符合和值要求的组合
+        max_attempts = 500
+        selected_numbers = None
+        
+        for attempt in range(max_attempts):
+            # 从热池抽取
+            hot_selected = select_numbers_from_pool(
+                hot_pool, all_scores, hot_count, hot_temperature
+            )
+            
+            # 从冷池抽取
+            cold_selected = select_numbers_from_pool(
+                cold_pool, all_scores, cold_count, cold_temperature
+            )
+            
+            # 合并
+            selected = sorted(hot_selected + cold_selected)
+            
+            # 验证和值
+            if is_sum_valid(selected, target_sum, tolerance):
+                selected_numbers = selected
+                break
+        
+        # 如果没找到符合和值的，用最后一次生成的
+        if selected_numbers is None:
+            hot_selected = select_numbers_from_pool(
+                hot_pool, all_scores, hot_count, hot_temperature
+            )
+            cold_selected = select_numbers_from_pool(
+                cold_pool, all_scores, cold_count, cold_temperature
+            )
+            selected_numbers = sorted(hot_selected + cold_selected)
+        
+        total = sum(selected_numbers)
+        
+        bets.append({
+            'numbers': selected_numbers,
+            'sum': total,
+            'target': f'方法A(目标{target_sum})',
+            'deviation': total - base_target,
+            'hot_count': hot_count,
+            'cold_count': cold_count
+        })
+    
+    return bets
+
+
+# ==================== 13. 获取方法A的详细评分数据（用于选页展示） ====================
+
+def get_method_a_score_details(draws: List[Dict],
+                               hot_range: tuple = (0, 10),
+                               zone_window: int = 15,
+                               zone_bonus_config: dict = None,
+                               pattern_config: dict = None,
+                               cold_config: dict = None,
+                               hot_temperature: float = 0.8,
+                               cold_temperature: float = 0.8) -> Dict:
+    """
+    获取方法A的详细评分数据，用于选页展示
+    
+    返回:
+        {
+            'hot_pool': List[int],           # 热池号码列表
+            'cold_pool': List[int],          # 冷池号码列表
+            'scores': Dict[int, int],        # 所有号码评分
+            'probs': Dict[int, float],       # 热池内抽出概率
+            'cold_probs': Dict[int, float],  # 冷池内抽出概率
+            'zone_rank': Dict[int, int],     # 各分区排名
+            'zone_counts': Dict[int, int],   # 各分区出现次数
+        }
+    """
+    # 计算所有号码评分
+    scores = calculate_all_scores(
+        draws, hot_range, zone_window, 
+        zone_bonus_config, pattern_config, cold_config
+    )
+    
+    # 划分池子
+    hot_pool, cold_pool = split_pools_by_absence(draws, hot_range)
+    
+    # 计算热池内抽出概率
+    hot_scores = {num: scores[num] for num in hot_pool}
+    hot_score_list = [hot_scores[num] for num in hot_pool]
+    exp_hot = np.exp(np.array(hot_score_list) / hot_temperature)
+    hot_probs = exp_hot / np.sum(exp_hot)
+    hot_probs_dict = {num: prob for num, prob in zip(hot_pool, hot_probs)}
+    
+    # 计算冷池内抽出概率
+    cold_scores = {num: scores[num] for num in cold_pool}
+    cold_score_list = [cold_scores[num] for num in cold_pool]
+    exp_cold = np.exp(np.array(cold_score_list) / cold_temperature)
+    cold_probs = exp_cold / np.sum(exp_cold)
+    cold_probs_dict = {num: prob for num, prob in zip(cold_pool, cold_probs)}
+    
+    # 计算分区排名
+    zone_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0}
+    for draw in draws[-zone_window:]:
+        for num in draw['numbers']:
+            zone_counts[get_zone(num)] += 1
+    
+    sorted_zones = sorted(zone_counts.items(), key=lambda x: x[1], reverse=True)
+    zone_rank = {zone: rank + 1 for rank, (zone, _) in enumerate(sorted_zones)}
+    
+    return {
+        'hot_pool': hot_pool,
+        'cold_pool': cold_pool,
+        'scores': scores,
+        'hot_probs': hot_probs_dict,
+        'cold_probs': cold_probs_dict,
+        'zone_rank': zone_rank,
+        'zone_counts': zone_counts,
+    }
+# =====
 
 print("第1部分加载完成 (v7.1 - 修复排序和日期问题)")
 print("=" * 60)
@@ -2779,68 +3429,75 @@ with col4:
     st.metric("数据总量", f"{len(draws)} 期")
 
 st.markdown("---")
+# ===
+# ==================== 冷热码分析 & 方法A详情 ====================
+tab1, tab2 = st.tabs(["📊 冷热码分析", "🎯 方法A：分池评分"])
 
-# ==================== 冷热码分析 ====================
-st.subheader("🔥 冷热码分析")
-
-col1, col2 = st.columns(2)
-with col1:
-    analysis_periods = st.number_input(
-        "分析期数", 
-        min_value=10, 
-        max_value=min(300, len(draws)), 
-        value=min(100, len(draws)), 
-        step=10,
-        key="analysis_periods"
-    )
-with col2:
-    zone_periods = st.number_input(
-        "分区分析期数",
-        min_value=10,
-        max_value=min(300, len(draws)),
-        value=min(50, len(draws)),
-        step=10,
-        key="zone_periods"
-    )
-
-# 计算分数
-enhanced_scores, pattern_boosts, hot_zones = calculate_enhanced_scores(
-    draws, window_total=analysis_periods
-)
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("**🔥 热门号码 (Top 15)**")
-    hot_df = pd.DataFrame([
-        {'号码': num, '得分': f"{enhanced_scores[num]:.2f}", '规律加权': f"{pattern_boosts[num]:.2f}x"}
-        for num in sorted(enhanced_scores, key=enhanced_scores.get, reverse=True)[:15]
-    ])
-    st.dataframe(hot_df, use_container_width=True, hide_index=True)
-
-with col2:
-    st.markdown("**❄️ 冷门号码 (Bottom 10)**")
-    cold_df = pd.DataFrame([
-        {'号码': num, '得分': f"{enhanced_scores[num]:.2f}"}
-        for num in sorted(enhanced_scores, key=enhanced_scores.get)[:10]
-    ])
-    st.dataframe(cold_df, use_container_width=True, hide_index=True)
-
-with col3:
-    st.markdown("**🔥 当前热区 (7分区)**")
-    zone_scores, zone_hits = calculate_zone_heat(draws, last_n=zone_periods)
-    hot_zones_list = get_hot_zones(zone_scores, num_hot_zones=3)
+with tab1:
+    st.subheader("🔥 冷热码分析")
     
-    zone_display = []
-    for z in range(1, 8):
-        zone_range = f"{get_zone_numbers(z)[0]:02d}-{get_zone_numbers(z)[-1]:02d}"
-        is_hot = z in hot_zones_list
-        zone_display.append({
-            '分区': f"{chr(64+z)}区 ({zone_range})",
-            '热度': '🔥' if is_hot else '❄️',
-            '出现次数': zone_hits[z]
-        })
-    st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        analysis_periods = st.number_input(
+            "分析期数", 
+            min_value=10, 
+            max_value=min(300, len(draws)), 
+            value=min(100, len(draws)), 
+            step=10,
+            key="analysis_periods"
+        )
+    with col2:
+        zone_periods = st.number_input(
+            "分区分析期数",
+            min_value=10,
+            max_value=min(300, len(draws)),
+            value=min(50, len(draws)),
+            step=10,
+            key="zone_periods"
+        )
+    
+    # 计算分数
+    enhanced_scores, pattern_boosts, hot_zones = calculate_enhanced_scores(
+        draws, window_total=analysis_periods
+    )
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("**🔥 热门号码 (Top 15)**")
+        hot_df = pd.DataFrame([
+            {'号码': num, '得分': f"{enhanced_scores[num]:.2f}", '规律加权': f"{pattern_boosts[num]:.2f}x"}
+            for num in sorted(enhanced_scores, key=enhanced_scores.get, reverse=True)[:15]
+        ])
+        st.dataframe(hot_df, use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.markdown("**❄️ 冷门号码 (Bottom 10)**")
+        cold_df = pd.DataFrame([
+            {'号码': num, '得分': f"{enhanced_scores[num]:.2f}"}
+            for num in sorted(enhanced_scores, key=enhanced_scores.get)[:10]
+        ])
+        st.dataframe(cold_df, use_container_width=True, hide_index=True)
+    
+    with col3:
+        st.markdown("**🔥 当前热区 (7分区)**")
+        zone_scores, zone_hits = calculate_zone_heat(draws, last_n=zone_periods)
+        hot_zones_list = get_hot_zones(zone_scores, num_hot_zones=3)
+        
+        zone_display = []
+        for z in range(1, 8):
+            zone_range = f"{get_zone_numbers(z)[0]:02d}-{get_zone_numbers(z)[-1]:02d}"
+            is_hot = z in hot_zones_list
+            zone_display.append({
+                '分区': f"{chr(64+z)}区 ({zone_range})",
+                '热度': '🔥' if is_hot else '❄️',
+                '出现次数': zone_hits[z]
+            })
+        st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
+
+with tab2:
+    # 方法A分池评分详情
+    show_method_a_score_details()
 
 st.markdown("---")
 #-----
@@ -2958,7 +3615,257 @@ sum_predict_method = st.radio(
 )
 
 st.markdown("---")
+# ===
+# ==================== 方法A：分池评分法 - 配置和辅助函数 ====================
 
+class MethodAConfig:
+    """方法A配置类，存储所有可调参数"""
+    hot_count = 6
+    cold_count = 1
+    hot_range = (0, 10)
+    hot_temperature = 0.8
+    cold_temperature = 0.8
+    zone_window = 15
+
+
+def get_method_a_config_from_session():
+    """从session_state获取方法A配置"""
+    config = MethodAConfig()
+    config.hot_count = st.session_state.get('method_a_hot_count', 6)
+    config.cold_count = st.session_state.get('method_a_cold_count', 1)
+    config.hot_range = (st.session_state.get('method_a_hot_range_start', 0), 
+                        st.session_state.get('method_a_hot_range_end', 10))
+    config.hot_temperature = st.session_state.get('method_a_hot_temperature', 0.8)
+    config.cold_temperature = st.session_state.get('method_a_cold_temperature', 0.8)
+    config.zone_window = st.session_state.get('method_a_zone_window', 15)
+    return config
+
+
+def show_method_a_advanced_settings():
+    """显示方法A的高级设置"""
+    with st.expander("⚙️ 方法A高级设置（可调整评分参数）", expanded=False):
+        st.markdown("**📊 池间分配**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.number_input("热池抽取个数", min_value=4, max_value=6, value=6, step=1, key="method_a_hot_count")
+        with col2:
+            st.number_input("冷池抽取个数", min_value=1, max_value=3, value=1, step=1, key="method_a_cold_count")
+        
+        st.markdown("---")
+        st.markdown("**🔥 热池参数**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
+        with col2:
+            st.number_input("热池遗漏起始", min_value=0, max_value=5, value=0, step=1, key="method_a_hot_range_start")
+            st.number_input("热池遗漏结束", min_value=5, max_value=15, value=10, step=1, key="method_a_hot_range_end")
+        
+        st.markdown("---")
+        st.markdown("**❄️ 冷池参数**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
+        with col2:
+            st.number_input("冷池遗漏起始", min_value=8, max_value=15, value=11, step=1, key="method_a_cold_range_start")
+        
+        st.markdown("---")
+        st.markdown("**🗺️ 分区热度参数**")
+        st.slider("分区窗口期（期数）", min_value=10, max_value=30, value=15, step=5, key="method_a_zone_window")
+        
+        st.markdown("**分区加分（可自定义）**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("第1热区加分", value=8, min_value=0, max_value=20, key="zone1_bonus")
+            st.number_input("第2热区加分", value=5, min_value=0, max_value=20, key="zone2_bonus")
+        with col2:
+            st.number_input("第3热区加分", value=3, min_value=0, max_value=20, key="zone3_bonus")
+            st.number_input("第4热区加分", value=0, min_value=0, max_value=20, key="zone4_bonus")
+        with col3:
+            st.number_input("第5热区加分", value=0, min_value=0, max_value=20, key="zone5_bonus")
+            st.number_input("第6热区加分", value=0, min_value=0, max_value=20, key="zone6_bonus")
+            st.number_input("第7热区加分", value=0, min_value=0, max_value=20, key="zone7_bonus")
+        
+        st.markdown("**📐 规律加分（可自定义）**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("夹号-间隔2", value=15, min_value=0, max_value=25, key="pattern_gap2")
+            st.number_input("夹号-间隔3", value=10, min_value=0, max_value=20, key="pattern_gap3")
+        with col2:
+            st.number_input("边号(正码)", value=8, min_value=0, max_value=15, key="pattern_edge_normal")
+            st.number_input("边号(特码)", value=6, min_value=0, max_value=15, key="pattern_edge_special")
+        with col3:
+            st.number_input("连号潜力", value=5, min_value=0, max_value=10, key="pattern_consecutive")
+            st.number_input("隔期模式", value=5, min_value=0, max_value=10, key="pattern_alternate")
+            st.number_input("单号上限", value=25, min_value=15, max_value=35, key="pattern_max")
+        
+        st.markdown("**🔄 冷码专有加分**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.number_input("频率加速度", value=12, min_value=0, max_value=20, key="cold_freq_acc")
+            st.number_input("遗漏13-15期", value=8, min_value=0, max_value=15, key="cold_miss_13_15")
+        with col2:
+            st.number_input("连续2期出现", value=10, min_value=0, max_value=15, key="cold_consecutive")
+            st.number_input("冷号回补", value=8, min_value=0, max_value=15, key="cold_return")
+        with col3:
+            st.number_input("相邻冷号", value=5, min_value=0, max_value=10, key="cold_neighbor")
+            st.number_input("冷码上限", value=20, min_value=10, max_value=30, key="cold_max")
+        
+        if st.button("恢复默认设置", key="reset_method_a"):
+            for key in list(st.session_state.keys()):
+                if key.startswith("method_a_") or key in ["zone1_bonus", "zone2_bonus", "zone3_bonus", 
+                    "zone4_bonus", "zone5_bonus", "zone6_bonus", "zone7_bonus", "pattern_gap2", "pattern_gap3",
+                    "pattern_edge_normal", "pattern_edge_special", "pattern_consecutive", "pattern_alternate",
+                    "pattern_max", "cold_freq_acc", "cold_miss_13_15", "cold_consecutive", "cold_return",
+                    "cold_neighbor", "cold_max"]:
+                    del st.session_state[key]
+            st.rerun()
+
+
+def generate_method_a_bets_wrapper(draws, num_bets, num_count, random_seed, sum_predict_method):
+    """方法A投注生成包装函数"""
+    config = get_method_a_config_from_session()
+    
+    zone_bonus_config = {
+        1: st.session_state.get('zone1_bonus', 8),
+        2: st.session_state.get('zone2_bonus', 5),
+        3: st.session_state.get('zone3_bonus', 3),
+        4: st.session_state.get('zone4_bonus', 0),
+        5: st.session_state.get('zone5_bonus', 0),
+        6: st.session_state.get('zone6_bonus', 0),
+        7: st.session_state.get('zone7_bonus', 0),
+    }
+    
+    pattern_config = {
+        "gap_2": st.session_state.get('pattern_gap2', 15),
+        "gap_3": st.session_state.get('pattern_gap3', 10),
+        "edge_normal": st.session_state.get('pattern_edge_normal', 8),
+        "edge_special": st.session_state.get('pattern_edge_special', 6),
+        "consecutive": st.session_state.get('pattern_consecutive', 5),
+        "alternate": st.session_state.get('pattern_alternate', 5),
+        "max": st.session_state.get('pattern_max', 25),
+    }
+    
+    cold_config = {
+        "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+        "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+        "consecutive": st.session_state.get('cold_consecutive', 10),
+        "cold_return": st.session_state.get('cold_return', 8),
+        "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+        "max": st.session_state.get('cold_max', 20),
+    }
+    
+    return generate_bets_method_a(
+        draws, num_bets, num_count,
+        hot_count=config.hot_count, cold_count=config.cold_count,
+        hot_range=config.hot_range,
+        hot_temperature=config.hot_temperature,
+        cold_temperature=config.cold_temperature,
+        zone_window=config.zone_window,
+        zone_bonus_config=zone_bonus_config,
+        pattern_config=pattern_config,
+        cold_config=cold_config,
+        sum_predict_method=sum_predict_method,
+        random_seed=random_seed
+    )
+
+
+def show_method_a_score_details():
+    """显示方法A的详细评分信息"""
+    st.markdown("### 📊 方法A：分池评分详情")
+    
+    if not draws:
+        st.warning("请先加载数据")
+        return
+    
+    config = get_method_a_config_from_session()
+    
+    zone_bonus_config = {
+        1: st.session_state.get('zone1_bonus', 8),
+        2: st.session_state.get('zone2_bonus', 5),
+        3: st.session_state.get('zone3_bonus', 3),
+        4: st.session_state.get('zone4_bonus', 0),
+        5: st.session_state.get('zone5_bonus', 0),
+        6: st.session_state.get('zone6_bonus', 0),
+        7: st.session_state.get('zone7_bonus', 0),
+    }
+    
+    pattern_config = {
+        "gap_2": st.session_state.get('pattern_gap2', 15),
+        "gap_3": st.session_state.get('pattern_gap3', 10),
+        "edge_normal": st.session_state.get('pattern_edge_normal', 8),
+        "edge_special": st.session_state.get('pattern_edge_special', 6),
+        "consecutive": st.session_state.get('pattern_consecutive', 5),
+        "alternate": st.session_state.get('pattern_alternate', 5),
+        "max": st.session_state.get('pattern_max', 25),
+    }
+    
+    cold_config = {
+        "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+        "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+        "consecutive": st.session_state.get('cold_consecutive', 10),
+        "cold_return": st.session_state.get('cold_return', 8),
+        "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+        "max": st.session_state.get('cold_max', 20),
+    }
+    
+    with st.spinner("计算评分中..."):
+        details = get_method_a_score_details(
+            draws,
+            hot_range=config.hot_range,
+            zone_window=config.zone_window,
+            zone_bonus_config=zone_bonus_config,
+            pattern_config=pattern_config,
+            cold_config=cold_config,
+            hot_temperature=config.hot_temperature,
+            cold_temperature=config.cold_temperature
+        )
+    
+    st.info(f"🎯 当前池间分配: 热池{config.hot_count}个 + 冷池{config.cold_count}个")
+    
+    st.markdown("---")
+    st.markdown("### 🗺️ 当前热区7分区")
+    
+    zone_data = []
+    for zone in range(1, 8):
+        zone_name = f"{chr(64+zone)}区"
+        zone_range = f"{get_zone_numbers(zone)[0]:02d}-{get_zone_numbers(zone)[-1]:02d}"
+        count = details['zone_counts'][zone]
+        rank = details['zone_rank'][zone]
+        bonus = zone_bonus_config.get(rank, 0)
+        zone_data.append({
+            "分区": zone_name,
+            "范围": zone_range,
+            "出现次数": count,
+            "排名": f"第{rank}热区" if rank <= 3 else f"第{rank}区",
+            "当前加分": f"+{bonus}" if bonus > 0 else "0"
+        })
+    st.dataframe(pd.DataFrame(zone_data), use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("### 🔥 热池Top20（遗漏0-10期）")
+    
+    hot_scores_with_prob = [(num, details['scores'][num], details['hot_probs'].get(num, 0)) 
+                            for num in details['hot_pool']]
+    hot_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+    
+    hot_df = pd.DataFrame([
+        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
+        for num, score, prob in hot_scores_with_prob[:20]
+    ])
+    st.dataframe(hot_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("### ❄️ 冷池Top20（遗漏>10期）")
+    
+    cold_scores_with_prob = [(num, details['scores'][num], details['cold_probs'].get(num, 0)) 
+                            for num in details['cold_pool']]
+    cold_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+    
+    cold_df = pd.DataFrame([
+        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
+        for num, score, prob in cold_scores_with_prob[:20]
+    ])
+    st.dataframe(cold_df, use_container_width=True, hide_index=True)
 # ==================== 智能投注生成 ====================
 st.subheader("🎲 智能投注生成")
 
@@ -2974,17 +3881,24 @@ with col3:
     ai_model = st.selectbox(
         "🤖 AI预测模型",
         [
+            "方法A: 分池评分法 ⭐推荐",
             "方法1: 当前方法",
             "方法2: 胆拖混合",
             "方法3: LightGBM",
             "方法4: XGBoost+NN",
-            "方法5: 综合模式 ⭐推荐"
+            "方法5: 综合模式"
         ],
-        index=4,
+        index=0,
         key="ai_model"
     )
 
 with st.expander("⚙️ 高级设置"):
+    # ==================== 方法A高级设置（可折叠） ====================
+    show_method_a_advanced_settings()
+    
+    st.markdown("---")
+    st.markdown("**📈 通用参数**")
+    
     col1, col2 = st.columns(2)
     with col1:
         trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="trend_window")
@@ -3025,24 +3939,29 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             st.warning(f"⚠️ 无法解析 '{seed_input}'，将使用系统时间")
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
-        if "方法1" in ai_model:
+        if "方法A" in ai_model:
+            bets = generate_method_a_bets_wrapper(
+                draws, num_bets, num_count, random_seed, sum_predict_method
+            )
+            model_used = "方法A: 分池评分法"
+        elif "方法1" in ai_model:
             bets = generate_bets_method1_current(
-                draws, num_bets, num_count, trend_window, random_seed, method1_window
+                draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
             )
             model_used = "方法1: 当前方法"
         elif "方法2" in ai_model:
             bets = generate_bets_method2_hybrid(
-                draws, num_bets, num_count, trend_window, random_seed, method1_window
+                draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
             )
             model_used = "方法2: 胆拖混合"
         elif "方法3" in ai_model:
             bets = generate_bets_method3_lightgbm(
-                draws, num_bets, num_count, trend_window, random_seed, method3_window
+                draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method
             )
             model_used = "方法3: LightGBM"
         elif "方法4" in ai_model:
             bets = generate_bets_method4_ensemble(
-                draws, num_bets, num_count, trend_window, random_seed, method4_window
+                draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
             )
             model_used = "方法4: XGBoost+NN"
         else:
@@ -3164,7 +4083,9 @@ else:
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
         st.markdown("**📊 回测方法选择**")
-        col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(5)
+        col_methodA, col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(6)
+        with col_methodA:
+            enable_method_a = st.checkbox("方法A", value=True, key="bt_enable_method_a")
         with col_method1:
             enable_method1 = st.checkbox("方法1", value=True, key="bt_enable_method1")
         with col_method2:
@@ -3187,13 +4108,19 @@ else:
         with col2:
             test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
             st.markdown("**训练期数设置**")
-            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
-            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                method_a_window = st.number_input("方法A期数", min_value=50, max_value=500, value=100, step=10, key="bt_method_a_window")
+            with col2:
+                method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
+            with col3:
+                method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+            with col4:
+                method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
                     
         with col3:
             # 计算最大可用回测期数
-            max_window = max(method1_window, method3_window, method4_window)
+            max_window = max(method_a_window, method1_window, method3_window, method4_window)
             max_backtest_periods = total_draws_count - max_window
             if max_backtest_periods < 1:
                 st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
@@ -3234,8 +4161,10 @@ else:
     
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-        # 5种方法列表（根据复选框筛选）
+         # 6种方法列表（根据复选框筛选）
         methods = []
+        if enable_method_a:
+            methods.append(("方法A: 分池评分法", "方法A"))
         if enable_method1:
             methods.append(("方法1: 当前方法", "方法1"))
         if enable_method2:
@@ -3259,20 +4188,37 @@ else:
                 status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
                 
                 # 根据方法选择对应的训练窗口
-                if method_key in ["方法1", "方法2"]:
+                if method_key == "方法A":
+                    bt_window = method_a_window
+                elif method_key in ["方法1", "方法2"]:
                     bt_window = method1_window
                 elif method_key == "方法3":
                     bt_window = method3_window
                 else:
                     bt_window = method4_window
                 
-                # 调用回测函数（不再需要 shared_cache）
-                result = run_backtest_single_method(
-                    backtest_draws, method_key, test_bets, test_num_count,
-                    test_trend_window, test_periods, bt_window,
-                    seed_mode, fixed_seed_value,
-                    sum_predict_method  # 新增
-                )
+                # 调用回测函数
+                if method_key == "方法A":
+                    config = get_method_a_config_from_session()
+                    result = run_backtest_method_a(
+                        backtest_draws, test_bets, test_num_count,
+                        test_periods, bt_window,
+                        seed_mode, fixed_seed_value,
+                        sum_predict_method,
+                        hot_count=config.hot_count,
+                        cold_count=config.cold_count,
+                        hot_range=config.hot_range,
+                        hot_temperature=config.hot_temperature,
+                        cold_temperature=config.cold_temperature,
+                        zone_window=config.zone_window
+                    )
+                else:
+                    result = run_backtest_single_method(
+                        backtest_draws, method_key, test_bets, test_num_count,
+                        test_trend_window, test_periods, bt_window,
+                        seed_mode, fixed_seed_value,
+                        sum_predict_method
+                    )
                 
                 if result:
                     all_results.append(result)
@@ -3341,16 +4287,17 @@ with st.sidebar:
                 st.success("✅ scikit-learn")
             else:
                 st.error("❌ scikit-learn")
-    
-    with st.expander("📖 五种AI算法对比"):
+    ＃－－－－
+    with st.expander("📖 六种AI算法对比"):
         st.markdown("""
         | 算法 | 核心原理 | 规律加权 |
         |------|---------|---------|
+        | 🌟 方法A | 分池评分+Softmax | ✅ 已集成 |
         | 🟢 方法1 | 冷热码+和值 | ✅ 已集成 |
         | 🟡 方法2 | 胆拖混合 | ✅ 已集成 |
         | 🔵 方法3 | LightGBM | 规律特征 |
         | 🟣 方法4 | XGBoost+NN | 规律特征 |
-        | 🌟 方法5 | 综合投票 | ✅ 已集成 |
+        | 🔴 方法5 | 综合投票 | ✅ 已集成 |
         """)
     #-----------------------
     with st.expander("💰 奖金结构（7码复式半注）"):
@@ -3381,6 +4328,153 @@ with st.sidebar:
         | 重号(特码) | ×1.15 |
         """)
         st.caption("基于269期历史数据验证")
+#---------------
+def run_backtest_method_a(draws, num_bets, num_count, test_periods, train_window,
+                          seed_mode, fixed_seed_value, sum_predict_method,
+                          hot_count=6, cold_count=1, hot_range=(0, 10),
+                          hot_temperature=0.8, cold_temperature=0.8, zone_window=15):
+    """方法A回测函数"""
+    if len(draws) < train_window + test_periods:
+        return None
+    
+    method_seed_offset = 50
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_details = []
+    
+    from math import comb
+    cost_per_bet = comb(num_count, 6) * 5
+    
+    for i in range(test_periods):
+        train_draws = draws[:-(test_periods - i)]
+        test_draw = draws[-(test_periods - i)]
+        test_period = test_draw.get('period', '')
+        
+        if seed_mode == "date":
+            test_date = test_draw.get('date')
+            if test_date:
+                try:
+                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
+                    seed_val += method_seed_offset
+                except:
+                    seed_val = 42 + method_seed_offset + i
+            else:
+                seed_val = 42 + method_seed_offset + i
+        elif seed_mode == "fixed":
+            seed_val = fixed_seed_value + method_seed_offset
+        else:
+            seed_val = random.randint(0, 1000000) + method_seed_offset
+        
+        random.seed(seed_val)
+        np.random.seed(seed_val)
+        
+        # 获取加分配置
+        zone_bonus_config = {
+            1: st.session_state.get('zone1_bonus', 8),
+            2: st.session_state.get('zone2_bonus', 5),
+            3: st.session_state.get('zone3_bonus', 3),
+            4: st.session_state.get('zone4_bonus', 0),
+            5: st.session_state.get('zone5_bonus', 0),
+            6: st.session_state.get('zone6_bonus', 0),
+            7: st.session_state.get('zone7_bonus', 0),
+        }
+        
+        pattern_config = {
+            "gap_2": st.session_state.get('pattern_gap2', 15),
+            "gap_3": st.session_state.get('pattern_gap3', 10),
+            "edge_normal": st.session_state.get('pattern_edge_normal', 8),
+            "edge_special": st.session_state.get('pattern_edge_special', 6),
+            "consecutive": st.session_state.get('pattern_consecutive', 5),
+            "alternate": st.session_state.get('pattern_alternate', 5),
+            "max": st.session_state.get('pattern_max', 25),
+        }
+        
+        cold_config = {
+            "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+            "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+            "consecutive": st.session_state.get('cold_consecutive', 10),
+            "cold_return": st.session_state.get('cold_return', 8),
+            "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+            "max": st.session_state.get('cold_max', 20),
+        }
+        
+        bets = generate_bets_method_a(
+            train_draws, num_bets, num_count,
+            hot_count=hot_count, cold_count=cold_count,
+            hot_range=hot_range,
+            hot_temperature=hot_temperature,
+            cold_temperature=cold_temperature,
+            zone_window=zone_window,
+            zone_bonus_config=zone_bonus_config,
+            pattern_config=pattern_config,
+            cold_config=cold_config,
+            sum_predict_method=sum_predict_method,
+            random_seed=seed_val
+        )
+        
+        best_prize = 0
+        best_match_score = 0
+        
+        for bet in bets:
+            prize = calculate_7code_prize(bet['numbers'], test_draw)
+            match_score = get_best_match_score(bet['numbers'], test_draw)
+            
+            if prize > best_prize:
+                best_prize = prize
+                best_match_score = match_score
+        
+        total_cost += num_bets * cost_per_bet
+        total_prize += best_prize
+        
+        if best_prize > 0:
+            win_count += 1
+            if best_prize >= 5090000:
+                prize_desc = "509万"
+            elif best_prize >= 1530000:
+                prize_desc = "153万"
+            elif best_prize >= 30800:
+                prize_desc = "3.08万"
+            elif best_prize >= 10560:
+                prize_desc = "10,560"
+            elif best_prize >= 1040:
+                prize_desc = "1,040"
+            elif best_prize >= 4800:
+                prize_desc = "4,800"
+            elif best_prize >= 1600:
+                prize_desc = "1,600"
+            elif best_prize >= 520:
+                prize_desc = "520"
+            elif best_prize >= 320:
+                prize_desc = "320"
+            elif best_prize >= 160:
+                prize_desc = "160"
+            elif best_prize >= 80:
+                prize_desc = "80"
+            else:
+                prize_desc = str(best_prize)
+            
+            if best_match_score == int(best_match_score):
+                match_display = f"{int(best_match_score)}"
+            else:
+                match_display = f"{best_match_score:.1f}"
+            
+            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
+    
+    return {
+        "方法": "方法A: 分池评分法",
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": ", ".join(prize_details) if prize_details else "无"
+    }
 #---------------
 
 print("第4部分加载完成 (v7.1 - 修复版)")
