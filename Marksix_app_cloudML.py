@@ -3497,6 +3497,18 @@ with tab1:
             })
         st.dataframe(pd.DataFrame(zone_display), use_container_width=True, hide_index=True)
 #-----
+def get_method_a_config_from_session():
+    """从session_state获取方法A配置"""
+    config = MethodAConfig()
+    config.hot_count = st.session_state.get('method_a_hot_count', 6)
+    config.cold_count = st.session_state.get('method_a_cold_count', 1)
+    config.hot_range = (st.session_state.get('method_a_hot_range_start', 0), 
+                        st.session_state.get('method_a_hot_range_end', 10))
+    config.hot_temperature = st.session_state.get('method_a_hot_temperature', 0.8)
+    config.cold_temperature = st.session_state.get('method_a_cold_temperature', 0.8)
+    config.zone_window = st.session_state.get('method_a_zone_window', 15)
+    return config
+#-----
 def show_method_a_score_details(draws):
     """显示方法A的详细评分信息"""
     st.markdown("### 📊 方法A：分池评分详情")
