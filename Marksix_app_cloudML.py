@@ -1072,8 +1072,6 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     返回:
         总奖金（半注）
     """
-    from math import comb
-    
     draw_numbers = set(draw['numbers'])      # 6个正码
     draw_special = draw.get('special')       # 特码
     
@@ -1081,7 +1079,7 @@ def calculate_7code_prize(bet_numbers: List[int], draw: Dict) -> int:
     A = len(set(bet_numbers) & draw_numbers) # 中奖正码个数
     has_special = draw_special is not None and draw_special in bet_numbers
     
-    # 半注奖金表
+    # 半注奖金表（基于官方派彩规则）
     PRIZES = {
         7: 20,      # 第7组：中3码
         6: 160,     # 第6组：中3码+特码
@@ -1146,13 +1144,14 @@ def get_best_match_score(bet_numbers: List[int], draw: Dict) -> float:
     返回:
         最佳匹配分数，如 3.0（中3码）, 3.5（中3+特）, 4.0（中4码）等
     """
+    from itertools import combinations
+    
     draw_numbers = set(draw['numbers'])
     draw_special = draw.get('special')
     
-    N = len(bet_numbers)
     best_score = 0
     
-    # 枚举所有C(N,6)种6码组合（对于大N可能较慢，但N≤10，最多C(10,6)=210种）
+    # 枚举所有C(N,6)种6码组合
     for combo in combinations(bet_numbers, 6):
         match_count = len(set(combo) & draw_numbers)
         has_special_in_combo = draw_special is not None and draw_special in combo
@@ -2636,7 +2635,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         # 成本计算（半注）
         total_cost += num_bets * cost_per_bet
         total_prize += best_prize
-        
+        #---------------
         if best_prize > 0:
             win_count += 1
             # 格式化奖金显示
@@ -3338,19 +3337,20 @@ with st.sidebar:
         | 🟣 方法4 | XGBoost+NN | 规律特征 |
         | 🌟 方法5 | 综合投票 | ✅ 已集成 |
         """)
-    
+    #-----------------------
     with st.expander("💰 奖金结构（7码复式半注）"):
-        st.markdown("""
-        | 等级 | 条件 | 总奖金 |
-        |------|------|--------|
-        | 第7组 | 中3码 | $80 |
-        | 第6组 | 中3+特 | $240 |
-        | 第5组 | 中4码 | $1,040 |
-        | 第4组 | 中4+特 | $10,560 |
-        | 第3组 | 中5码 | ~$61,600 |
-        | 第2组 | 中5+特 | ~$3,060,000 |
-        | 第1组 | 中6码 | ~$10,180,000 |
-        """)
+    st.markdown("""
+    | 7码中包含 | 总奖金 | 注数分布 |
+    |-----------|--------|----------|
+    | 3个正码 | **$80** | 4注中3码 |
+    | 3正 + 特码 | **$500** | 1注中3码 + 3注中3+特 |
+    | 4个正码 | **$1,040** | 3注中4码 + 4注中3码 |
+    | 4正 + 特码 | **$10,560** | 2注中4+特 + 1注中4码 + 4注中3+特 |
+    | 5个正码 | **~$61,600** | 复杂分布 |
+    | 5正 + 特码 | **~$3,060,000** | 复杂分布 |
+    | 6个正码 | **~$10,180,000** | 复杂分布 |
+    """)
+    st.caption("💡 7码复式 = 7注，每注半注$5，总成本$35")
     
     with st.expander("📐 规律加权说明"):
         st.markdown("""
