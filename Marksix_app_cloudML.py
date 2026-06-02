@@ -3900,7 +3900,8 @@ def show_method_a_advanced_settings():
         st.markdown("**🔥 热池参数**")
         col1, col2 = st.columns(2)
         with col1:
-          # st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
+            # 温度参数已废弃，保留注释
+            pass
         with col2:
             st.number_input("热池遗漏起始", min_value=0, max_value=5, value=0, step=1, key="method_a_hot_range_start")
             st.number_input("热池遗漏结束", min_value=5, max_value=15, value=10, step=1, key="method_a_hot_range_end")
@@ -3909,7 +3910,8 @@ def show_method_a_advanced_settings():
         st.markdown("**❄️ 冷池参数**")
         col1, col2 = st.columns(2)
         with col1:
-         #  st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
+            # 温度参数已废弃，保留注释
+            pass
         with col2:
             st.number_input("冷池遗漏起始", min_value=8, max_value=15, value=11, step=1, key="method_a_cold_range_start")
         
