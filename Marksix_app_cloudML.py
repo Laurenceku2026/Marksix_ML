@@ -3287,7 +3287,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
             if test_date:
                 try:
                     dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
-                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
+                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
                     seed_val += method_seed_offset
                 except:
                     seed_val = 42 + method_seed_offset + i
@@ -4002,7 +4002,29 @@ with st.expander("⚙️ 高级设置"):
     with col1:
         trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="trend_window")
     with col2:
-        seed_input = st.text_input("随机种子", value="", placeholder="留空使用系统时间 | 或输入日期如: 2026-05-13", key="seed_input")
+        st.markdown("**🎲 随机种子模式**")
+        seed_mode = st.radio(
+            "选择种子模式",
+            options=["日期+时间", "用户输入固定种子", "机器自动产生（每期随机）"],
+            index=0,
+            key="seed_mode",
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        
+        seed_date = None
+        seed_time = None
+        fixed_seed_value = None
+        
+        if seed_mode == "日期+时间":
+            col_date, col_time = st.columns(2)
+            with col_date:
+                seed_date = st.date_input("选择日期", value=datetime.now().date(), key="seed_date")
+            with col_time:
+                seed_time = st.time_input("选择时间", value=datetime.strptime("21:30", "%H:%M").time(), key="seed_time")
+        elif seed_mode == "用户输入固定种子":
+            fixed_seed_value = st.number_input("输入固定种子值", min_value=0, max_value=1000000, value=7, step=1, key="fixed_seed_value")
+        # 机器自动产生：不需要额外输入
     
     st.markdown("**📊 训练期数设置**")
     col1, col2, col3 = st.columns(3)
@@ -4029,13 +4051,24 @@ st.caption(f"💡 **和值预测 ({sum_method_name})**: 范围 {sum_lower}-{sum_
 #------------------
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     # 解析随机种子
+    # 解析随机种子
     random_seed = None
-    if seed_input and seed_input.strip():
-        random_seed = parse_datetime_string(seed_input)
-        if random_seed:
-            st.success(f"✅ 已设置随机种子: {seed_input}")
+    if seed_mode == "日期+时间":
+        if seed_date and seed_time:
+            dt = datetime.combine(seed_date, seed_time)
+            random_seed = int(dt.timestamp())
+            st.success(f"✅ 已设置随机种子: {seed_date} {seed_time}")
         else:
-            st.warning(f"⚠️ 无法解析 '{seed_input}'，将使用系统时间")
+            st.warning("⚠️ 请选择日期和时间")
+    elif seed_mode == "用户输入固定种子":
+        if fixed_seed_value is not None:
+            random_seed = int(fixed_seed_value)
+            st.success(f"✅ 已设置固定种子: {fixed_seed_value}")
+        else:
+            st.warning("⚠️ 请输入固定种子值")
+    else:  # 机器自动产生
+        random_seed = None
+        st.info("🔧 使用机器自动产生的随机种子（每期不同）")
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
         if "方法A" in ai_model:
@@ -4240,7 +4273,7 @@ else:
     with col_seed1:
         seed_mode_option = st.radio(
             "选择种子模式",
-            options=["日期+21:15（每期用自己的开奖日期）", "用户输入固定种子", "机器自动产生（每期随机）"],
+            options=["日期+时间（每期用自己的开奖日期+21:30）", "用户输入固定种子", "机器自动产生（每期随机）"],
             index=0,
             key="backtest_seed_mode",
             horizontal=False
@@ -4249,9 +4282,13 @@ else:
         fixed_seed_value = 1
         if "用户输入固定种子" in seed_mode_option:
             fixed_seed_value = st.number_input("请输入固定种子值", min_value=0, max_value=10000, value=7, step=1, key="bt_fixed_seed")
+        
+        # 显示当前设置说明
+        if "日期+时间" in seed_mode_option:
+            st.caption("📅 每期使用开奖日期 + 21:30 生成种子")
     
     # 映射种子模式
-    if "日期+21:15" in seed_mode_option:
+    if "日期+时间" in seed_mode_option:
         seed_mode = "date"
     elif "用户输入固定种子" in seed_mode_option:
         seed_mode = "fixed"
@@ -4285,7 +4322,7 @@ else:
                 if test_date:
                     try:
                         dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
-                        seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
+                        seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
                         seed_val += method_seed_offset
                     except:
                         seed_val = 42 + method_seed_offset + i
