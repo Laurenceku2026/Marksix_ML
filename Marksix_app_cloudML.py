@@ -815,13 +815,9 @@ def calculate_absence(num: int, draws: list) -> int:
 # ==================== 2. 基础分（基于遗漏期数） ====================
 
 def get_base_score(absence: int, hot_range: tuple = (0, 10)) -> int:
-    """
-    获取基础分
-    hot_range: (min, max) 热池遗漏范围，默认0-10期
-    """
     hot_min, hot_max = hot_range
     if hot_min <= absence <= hot_max:
-        return 50  # 热池基础分
+        return 55  # 热池基础分（从50提高到55）
     else:
         return 20  # 冷池基础分
 
@@ -846,15 +842,11 @@ def get_zone_rank(num: int, draws: list, window: int = 15) -> int:
     rank = [z for z, _ in sorted_zones].index(zone) + 1
     return rank
 
-
+#------------
 def get_zone_bonus(zone_rank: int, bonus_config: dict = None) -> int:
-    """
-    获取分区加分
-    bonus_config: 自定义加分配置，默认：
-        {1: 8, 2: 5, 3: 3, 4: 0, 5: 0, 6: 0, 7: 0}
-    """
+    """获取分区加分"""
     if bonus_config is None:
-        bonus_config = {1: 8, 2: 5, 3: 3, 4: 0, 5: 0, 6: 0, 7: 0}
+        bonus_config = {1: 12, 2: 8, 3: 5, 4: 0, 5: 0, 6: 0, 7: 0}
     return bonus_config.get(zone_rank, 0)
 
 
@@ -914,31 +906,19 @@ def is_alternate_pattern(num: int, draws: list) -> bool:
     last_last_draw = draws[-2]
     return num in last_last_draw['numbers']
 
-
+#------------
 def get_pattern_bonus(num: int, last_reds: list, last_special: int, draws: list,
                       pattern_config: dict = None) -> int:
-    """
-    计算规律加分总和
-    pattern_config: 自定义规律加分配置，默认：
-        {
-            "gap_2": 15,
-            "gap_3": 10,
-            "edge_normal": 8,
-            "edge_special": 6,
-            "consecutive": 5,
-            "alternate": 5,
-            "max": 25
-        }
-    """
+    """计算规律加分总和（无上限，可叠加）"""
     if pattern_config is None:
         pattern_config = {
-            "gap_2": 15,
-            "gap_3": 10,
-            "edge_normal": 8,
-            "edge_special": 6,
-            "consecutive": 5,
-            "alternate": 5,
-            "max": 25
+            "gap_2": 25,
+            "gap_3": 12,
+            "edge_normal": 15,
+            "edge_special": 10,
+            "consecutive": 8,
+            "alternate": 8,
+            "max": 999  # 无上限
         }
     
     bonus = 0
@@ -947,7 +927,7 @@ def get_pattern_bonus(num: int, last_reds: list, last_special: int, draws: list,
     if is_gap_2(num, last_reds):
         bonus += pattern_config["gap_2"]
     # 夹号-间隔3（次强）
-    elif is_gap_3(num, last_reds):
+    if is_gap_3(num, last_reds):  # 改为 if 而不是 elif，允许叠加
         bonus += pattern_config["gap_3"]
     
     # 正码边号
@@ -966,7 +946,7 @@ def get_pattern_bonus(num: int, last_reds: list, last_special: int, draws: list,
     if is_alternate_pattern(num, draws):
         bonus += pattern_config["alternate"]
     
-    return min(bonus, pattern_config["max"])
+    return bonus  # 无上限
 
 
 # ==================== 5. 冷码专有加分 ====================
@@ -1111,7 +1091,9 @@ def calculate_method_a_score(num: int, draws: list,
     
     # 6. 综合评分
     total_score = base_score + zone_bonus + pattern_bonus + cold_bonus
-    
+    # 冷池号码封顶49分
+    if base_score == 20:  # 冷池基础分20
+        total_score = min(total_score, 49)
     return total_score
 # =====
 # ==================== 方法A：分池评分法 - Softmax抽取与分池抽选 ====================
@@ -1146,22 +1128,21 @@ def softmax_select(pool: List[int], scores: Dict[int, int], temperature: float =
     selected = np.random.choice(pool, p=probs)
     return int(selected)
 
-
+#--------------
 def select_numbers_from_pool(pool: List[int], scores: Dict[int, int], 
-                              count: int, temperature: float = 0.8) -> List[int]:
+                              count: int) -> List[int]:
     """
-    从池中抽取指定数量的号码（不放回）
+    从池中抽取指定数量的号码（不放回）- 线性归一化
     
     参数:
         pool: 候选号码列表
         scores: 所有号码的评分字典
         count: 需要抽取的号码个数
-        temperature: 温度参数
     
     返回:
         被选中的号码列表（已排序）
     """
-    if count <= 0:
+    if count <= 0 or not pool:
         return []
     
     selected = []
@@ -1170,9 +1151,23 @@ def select_numbers_from_pool(pool: List[int], scores: Dict[int, int],
     for _ in range(count):
         if not temp_pool:
             break
-        num = softmax_select(temp_pool, scores, temperature)
-        selected.append(num)
-        temp_pool.remove(num)
+        
+        # 获取当前池内所有号码的分数
+        score_list = [scores.get(num, 0) for num in temp_pool]
+        total_score = sum(score_list)
+        
+        if total_score <= 0:
+            # 防错：如果总分为0，均匀抽取
+            probs = [1 / len(temp_pool)] * len(temp_pool)
+        else:
+            # 线性归一化：概率 = 分数 / 总分
+            probs = [s / total_score for s in score_list]
+        
+        # 按概率抽取
+        selected_idx = np.random.choice(len(temp_pool), p=probs)
+        selected_num = temp_pool[selected_idx]
+        selected.append(selected_num)
+        temp_pool.pop(selected_idx)
     
     return sorted(selected)
 
@@ -1396,14 +1391,14 @@ def generate_bets_method_a(draws: List[Dict], num_bets: int, num_count: int = 7,
         selected_numbers = None
         
         for attempt in range(max_attempts):
-            # 从热池抽取
+            # 从热池抽取（移除温度参数）
             hot_selected = select_numbers_from_pool(
-                hot_pool, all_scores, hot_count, hot_temperature
+                hot_pool, all_scores, hot_count
             )
             
-            # 从冷池抽取
+            # 从冷池抽取（移除温度参数）
             cold_selected = select_numbers_from_pool(
-                cold_pool, all_scores, cold_count, cold_temperature
+                cold_pool, all_scores, cold_count
             )
             
             # 合并
@@ -1446,8 +1441,8 @@ def get_method_a_score_details(draws: List[Dict],
                                zone_bonus_config: dict = None,
                                pattern_config: dict = None,
                                cold_config: dict = None,
-                               hot_temperature: float = 0.8,
-                               cold_temperature: float = 0.8) -> Dict:
+                               hot_temperature: float = None,
+                               cold_temperature: float = None) -> Dict:
     """
     获取方法A的详细评分数据，用于选页展示
     
@@ -1471,21 +1466,29 @@ def get_method_a_score_details(draws: List[Dict],
     # 划分池子
     hot_pool, cold_pool = split_pools_by_absence(draws, hot_range)
     
-    # 计算热池内抽出概率
+    # ========== 计算热池内抽出概率（线性归一化） ==========
     hot_probs_dict = {}
     if hot_pool:
         hot_scores = [scores[num] for num in hot_pool]
-        exp_hot = np.exp(np.array(hot_scores) / hot_temperature)
-        hot_probs = exp_hot / np.sum(exp_hot)
-        hot_probs_dict = {num: prob for num, prob in zip(hot_pool, hot_probs)}
+        total_hot_score = sum(hot_scores)
+        if total_hot_score > 0:
+            hot_probs = [s / total_hot_score for s in hot_scores]
+            hot_probs_dict = {num: prob for num, prob in zip(hot_pool, hot_probs)}
+        else:
+            prob = 1 / len(hot_pool)
+            hot_probs_dict = {num: prob for num in hot_pool}
     
-    # 计算冷池内抽出概率
+    # ========== 计算冷池内抽出概率（线性归一化） ==========
     cold_probs_dict = {}
     if cold_pool:
         cold_scores = [scores[num] for num in cold_pool]
-        exp_cold = np.exp(np.array(cold_scores) / cold_temperature)
-        cold_probs = exp_cold / np.sum(exp_cold)
-        cold_probs_dict = {num: prob for num, prob in zip(cold_pool, cold_probs)}
+        total_cold_score = sum(cold_scores)
+        if total_cold_score > 0:
+            cold_probs = [s / total_cold_score for s in cold_scores]
+            cold_probs_dict = {num: prob for num, prob in zip(cold_pool, cold_probs)}
+        else:
+            prob = 1 / len(cold_pool)
+            cold_probs_dict = {num: prob for num in cold_pool}
     
     # 计算分区排名
     zone_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0}
@@ -3897,7 +3900,7 @@ def show_method_a_advanced_settings():
         st.markdown("**🔥 热池参数**")
         col1, col2 = st.columns(2)
         with col1:
-            st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
+          # st.slider("热池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_hot_temperature")
         with col2:
             st.number_input("热池遗漏起始", min_value=0, max_value=5, value=0, step=1, key="method_a_hot_range_start")
             st.number_input("热池遗漏结束", min_value=5, max_value=15, value=10, step=1, key="method_a_hot_range_end")
@@ -3906,7 +3909,7 @@ def show_method_a_advanced_settings():
         st.markdown("**❄️ 冷池参数**")
         col1, col2 = st.columns(2)
         with col1:
-            st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
+         #  st.slider("冷池温度", min_value=0.5, max_value=1.2, value=0.8, step=0.05, key="method_a_cold_temperature")
         with col2:
             st.number_input("冷池遗漏起始", min_value=8, max_value=15, value=11, step=1, key="method_a_cold_range_start")
         
