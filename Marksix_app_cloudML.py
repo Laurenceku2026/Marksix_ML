@@ -4231,41 +4231,52 @@ else:
         
         st.markdown("---")
         st.markdown("**📈 回测参数**")
-        
+        #-----------
+        # 第一行：三列并排（每注号码数、和值趋势窗口、回测期数）
         col1, col2, col3 = st.columns(3)
         with col1:
             test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
             test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
-        #-------------------------
         with col2:
             test_trend_window = st.number_input("和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key="backtest_trend_window")
-            st.markdown("**训练期数设置**")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                method_a_window = st.number_input("方法A期数", min_value=50, max_value=500, value=100, step=10, key="bt_method_a_window")
-            with col2:
-                method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
-            with col3:
-                method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
-            with col4:
-                method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
-                    
         with col3:
-            # 计算最大可用回测期数
-            max_window = max(method_a_window, method1_window, method3_window, method4_window)
-            max_backtest_periods = total_draws_count - max_window
-            if max_backtest_periods < 1:
-                st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
-                st.stop()
-            
+            # 计算最大可用回测期数（需要先获取训练期数，所以这里先占位）
             test_periods = st.number_input(
                 "回测期数", 
                 min_value=1, 
-                max_value=max_backtest_periods, 
-                value=min(10, max_backtest_periods), 
+                max_value=100,  # 临时值，后面会更新
+                value=10, 
                 key="backtest_periods"
             )
-            st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
+        
+        # 第二行：训练期数设置（四列并排）
+        st.markdown("**📊 训练期数设置**")
+        col_a, col_1, col_3, col_4 = st.columns(4)
+        with col_a:
+            method_a_window = st.number_input("方法A期数", min_value=50, max_value=500, value=100, step=10, key="bt_method_a_window")
+        with col_1:
+            method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
+        with col_3:
+            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+        with col_4:
+            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
+        
+        # 计算最大可用回测期数并更新回测期数的最大值
+        max_window = max(method_a_window, method1_window, method3_window, method4_window)
+        max_backtest_periods = total_draws_count - max_window
+        if max_backtest_periods < 1:
+            st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
+            st.stop()
+        
+        # 更新回测期数的最大值
+        test_periods = st.number_input(
+            "回测期数", 
+            min_value=1, 
+            max_value=max_backtest_periods, 
+            value=min(test_periods, max_backtest_periods), 
+            key="backtest_periods_reload"
+        )
+        st.caption(f"📌 最大可用回测期数: {max_backtest_periods}期")
     
     st.markdown("---")
     st.markdown("**🎲 随机种子模式**")
