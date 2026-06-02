@@ -1425,10 +1425,9 @@ def generate_bets_method_a(draws: List[Dict], num_bets: int, num_count: int = 7,
             'numbers': selected_numbers,
             'sum': total,
             'target': f'方法A(目标{target_sum})',
-            'deviation': total - target_sum,  # ← 改为相对于 target_sum
-            ...
+            'deviation': total - target_sum
         })
-            
+                    
     return bets
 
 
