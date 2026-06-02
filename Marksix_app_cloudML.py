@@ -1233,7 +1233,7 @@ def calculate_all_scores(draws: List[Dict],
 def get_sum_target_for_method_a(draws: List[Dict], num_count: int, 
                                  sum_predict_method: str = "移动平均(7期)") -> int:
     """
-    获取方法A的和值目标（复用现有app的和值预测方法）
+    获取方法A的和值目标（使用7码和值：正码+特码）
     
     参数:
         draws: 历史开奖数据
@@ -1241,16 +1241,89 @@ def get_sum_target_for_method_a(draws: List[Dict], num_count: int,
         sum_predict_method: 和值预测方法
     
     返回:
-        和值目标
+        和值目标（7码和值）
     """
-    if sum_predict_method == "均值回归":
-        lower, upper = get_target_sum_mean_reversion_range(draws, num_count)
-    elif sum_predict_method == "移动平均(7期)":
-        lower, upper = get_target_sum_moving_average_range(draws)
-    else:  # 正弦拟合
-        lower, upper = get_target_sum_sine_range(draws)
+    # 计算最近N期的7码和值（正码+特码）
+    def get_7code_sums(draws, window):
+        sums = []
+        for draw in draws[-window:]:
+            numbers = draw.get('numbers', [])
+            special = draw.get('special', 0)
+            sum_7 = sum(numbers) + special
+            sums.append(sum_7)
+        return sums
     
-    return random.randint(lower, upper)
+    if sum_predict_method == "均值回归":
+        # 均值回归：基于最近100期7码和值
+        if len(draws) < 10:
+            return random.randint(158, 192)
+        
+        all_sums = get_7code_sums(draws, 100)
+        long_term_mean = np.mean(all_sums) if all_sums else 175
+        long_term_std = np.std(all_sums) if len(all_sums) > 1 else 20
+        
+        short_sums = get_7code_sums(draws, 4)
+        short_mean = np.mean(short_sums) if short_sums else long_term_mean
+        
+        threshold = long_term_std * 0.15
+        if short_mean > long_term_mean + threshold:
+            target = int(long_term_mean - 17 * 0.3)
+        elif short_mean < long_term_mean - threshold:
+            target = int(long_term_mean + 17 * 0.3)
+        else:
+            target = int(long_term_mean)
+        
+        target = max(140, min(210, target))
+        lower = max(140, target - 17)
+        upper = min(210, target + 17)
+        
+        return random.randint(lower, upper)
+    
+    elif sum_predict_method == "移动平均(7期)":
+        # 移动平均：基于最近7期7码和值
+        recent_sums = get_7code_sums(draws, 7)
+        if len(recent_sums) < 7:
+            return random.randint(158, 192)
+        
+        mean_val = np.mean(recent_sums)
+        lower = max(140, int(mean_val) - 17)
+        upper = min(210, int(mean_val) + 17)
+        
+        return random.randint(lower, upper)
+    
+    else:  # 正弦拟合
+        # 正弦拟合：基于最近10期7码和值
+        recent_sums = get_7code_sums(draws, 10)
+        if len(recent_sums) < 10:
+            return random.randint(158, 192)
+        
+        try:
+            from scipy.optimize import curve_fit
+            
+            def sine_func(x, A, omega, phi, C):
+                return A * np.sin(omega * x + phi) + C
+            
+            x = np.arange(10)
+            y = np.array(recent_sums)
+            A_guess = (np.max(y) - np.min(y)) / 2
+            C_guess = np.mean(y)
+            omega_guess = 2 * np.pi / 6.5
+            
+            params, _ = curve_fit(
+                sine_func, x, y,
+                p0=[A_guess, omega_guess, 0, C_guess],
+                maxfev=2000
+            )
+            A, omega, phi, C = params
+            next_val = sine_func(10, A, omega, phi, C)
+            target = max(140, min(210, int(round(next_val))))
+        except:
+            target = int(round(np.mean(recent_sums)))
+        
+        lower = max(140, target - 17)
+        upper = min(210, target + 17)
+        
+        return random.randint(lower, upper)
 
 
 # ==================== 11. 和值筛选 ====================
@@ -3519,7 +3592,7 @@ def get_method_a_config_from_session():
     return config
 #-----
 def show_method_a_score_details(draws):
-    """显示方法A的详细评分信息"""
+    """显示方法A的详细评分信息 - 三列并排版"""
     st.markdown("### 📊 方法A：分池评分详情")
     
     if not draws:
@@ -3569,52 +3642,61 @@ def show_method_a_score_details(draws):
             cold_temperature=config.cold_temperature
         )
     
-    st.info(f"🎯 当前池间分配: 热池{config.hot_count}个 + 冷池{config.cold_count}个")
+    # 显示当前配置信息
+    st.info(f"🎯 当前池间分配: 热池{config.hot_count}个 + 冷池{config.cold_count}个 | 热池温度: {config.hot_temperature} | 冷池温度: {config.cold_temperature}")
     
     st.markdown("---")
-    st.markdown("### 🗺️ 当前热区7分区")
     
-    zone_data = []
-    for zone in range(1, 8):
-        zone_name = f"{chr(64+zone)}区"
-        zone_range = f"{get_zone_numbers(zone)[0]:02d}-{get_zone_numbers(zone)[-1]:02d}"
-        count = details['zone_counts'][zone]
-        rank = details['zone_rank'][zone]
-        bonus = zone_bonus_config.get(rank, 0)
-        zone_data.append({
-            "分区": zone_name,
-            "范围": zone_range,
-            "出现次数": count,
-            "排名": f"第{rank}热区" if rank <= 3 else f"第{rank}区",
-            "当前加分": f"+{bonus}" if bonus > 0 else "0"
-        })
-    st.dataframe(pd.DataFrame(zone_data), use_container_width=True, hide_index=True)
+    # ========== 三列并排布局 ==========
+    col_left, col_center, col_right = st.columns(3)
     
-    st.markdown("---")
-    st.markdown("### 🔥 热池Top20（遗漏0-10期）")
+    # 左列：热池Top20
+    with col_left:
+        st.markdown("### 🔥 热池Top20（遗漏0-10期）")
+        
+        hot_scores_with_prob = [(num, details['scores'][num], details['hot_probs'].get(num, 0)) 
+                                for num in details['hot_pool']]
+        hot_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+        
+        hot_df = pd.DataFrame([
+            {"号码": num, "评分": score, "概率": f"{prob*100:.2f}%"}
+            for num, score, prob in hot_scores_with_prob[:20]
+        ])
+        st.dataframe(hot_df, use_container_width=True, hide_index=True)
     
-    hot_scores_with_prob = [(num, details['scores'][num], details['hot_probs'].get(num, 0)) 
-                            for num in details['hot_pool']]
-    hot_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+    # 中列：冷池Top20
+    with col_center:
+        st.markdown("### ❄️ 冷池Top20（遗漏>10期）")
+        
+        cold_scores_with_prob = [(num, details['scores'][num], details['cold_probs'].get(num, 0)) 
+                                for num in details['cold_pool']]
+        cold_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
+        
+        cold_df = pd.DataFrame([
+            {"号码": num, "评分": score, "概率": f"{prob*100:.2f}%"}
+            for num, score, prob in cold_scores_with_prob[:20]
+        ])
+        st.dataframe(cold_df, use_container_width=True, hide_index=True)
     
-    hot_df = pd.DataFrame([
-        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
-        for num, score, prob in hot_scores_with_prob[:20]
-    ])
-    st.dataframe(hot_df, use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    st.markdown("### ❄️ 冷池Top20（遗漏>10期）")
-    
-    cold_scores_with_prob = [(num, details['scores'][num], details['cold_probs'].get(num, 0)) 
-                            for num in details['cold_pool']]
-    cold_scores_with_prob.sort(key=lambda x: x[1], reverse=True)
-    
-    cold_df = pd.DataFrame([
-        {"号码": num, "评分": score, "抽出概率": f"{prob*100:.2f}%"}
-        for num, score, prob in cold_scores_with_prob[:20]
-    ])
-    st.dataframe(cold_df, use_container_width=True, hide_index=True)
+    # 右列：当前热区7分区
+    with col_right:
+        st.markdown("### 🗺️ 当前热区7分区")
+        
+        zone_data = []
+        for zone in range(1, 8):
+            zone_name = f"{chr(64+zone)}区"
+            zone_range = f"{get_zone_numbers(zone)[0]:02d}-{get_zone_numbers(zone)[-1]:02d}"
+            count = details['zone_counts'][zone]
+            rank = details['zone_rank'][zone]
+            bonus = zone_bonus_config.get(rank, 0)
+            zone_data.append({
+                "分区": zone_name,
+                "范围": zone_range,
+                "出现次数": count,
+                "排名": f"第{rank}热区" if rank <= 3 else f"第{rank}区",
+                "加分": f"+{bonus}" if bonus > 0 else "0"
+            })
+        st.dataframe(pd.DataFrame(zone_data), use_container_width=True, hide_index=True)
 #-----
 with tab2:
     # 方法A分池评分详情
