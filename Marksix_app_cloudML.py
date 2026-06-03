@@ -1238,17 +1238,9 @@ def calculate_all_scores(draws: List[Dict],
 # ==================== 10. 和值目标获取 ====================
 
 def get_sum_target_for_method_a(draws: List[Dict], num_count: int, 
-                                 sum_predict_method: str = "移动平均(7期)") -> int:
+                                 sum_predict_method: str = "动态回归") -> int:
     """
     获取方法A的和值目标（使用7码和值：正码+特码）
-    
-    参数:
-        draws: 历史开奖数据
-        num_count: 号码个数（7）
-        sum_predict_method: 和值预测方法
-    
-    返回:
-        和值目标（7码和值）
     """
     # 计算最近N期的7码和值（正码+特码）
     def get_7code_sums(draws, window):
@@ -1260,7 +1252,14 @@ def get_sum_target_for_method_a(draws: List[Dict], num_count: int,
             sums.append(sum_7)
         return sums
     
-    if sum_predict_method == "均值回归":
+    # 动态回归
+    if sum_predict_method == "动态回归":
+        target, tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=4)
+        offset = random.randint(-tolerance, tolerance)
+        result = target + offset
+        return max(140, min(210, result))
+    
+    elif sum_predict_method == "均值回归":
         # 均值回归：基于最近100期7码和值
         if len(draws) < 10:
             return random.randint(158, 192)
@@ -2417,7 +2416,7 @@ def generate_bets_method1_current(draws: List[Dict], num_bets: int, num_count: i
     """
     方法1：当前方法
     - 冷热码分析
-    - 动态和值预测
+    - 用户选择的预测方法（动态回归/均值回归/移动平均/正弦拟合）
     - 规律加权
     """
     if random_seed is not None:
@@ -2435,15 +2434,15 @@ def generate_bets_method1_current(draws: List[Dict], num_bets: int, num_count: i
     # 采样权重
     weights = get_sampling_weights(enhanced_scores, temperature=1.5)
     
-    # 和值预测
-    target_sum, tolerance, direction, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=trend_window)
     base_target = get_target_sum_by_numbers_count(num_count)
     
     bets = []
     for i in range(num_bets):
-        offset = random.randint(-tolerance, tolerance)
-        t = int(target_sum + offset)
-        t = max(base_target - 2 * tolerance, min(base_target + 2 * tolerance, t))
+        # 使用用户选择的预测方法
+        t = get_sum_target_by_method(draws, num_count, trend_window, sum_predict_method)
+        tolerance = 17  # 默认容差，动态回归的容差已在函数内部处理
+        t = max(140, min(210, t))  # 7码范围限制
+        
         nums, total = generate_one_combination(weights, num_count, t, tolerance)
         bets.append({
             'numbers': nums,
@@ -3387,17 +3386,14 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
 def get_sum_target_by_method(draws: List[Dict], num_count: int, trend_window: int, sum_predict_method: str) -> int:
     """
     根据用户选择的预测方法返回和值目标（每注独立随机）
-    
-    参数:
-        draws: 历史数据
-        num_count: 号码个数（7）
-        trend_window: 趋势窗口（仅用于均值回归，实际未使用）
-        sum_predict_method: "均值回归" / "移动平均(7期)" / "正弦拟合"
-    
-    返回:
-        随机生成的和值目标
     """
-    if sum_predict_method == "均值回归":
+    if sum_predict_method == "动态回归":
+        target, tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=trend_window)
+        offset = random.randint(-tolerance, tolerance)
+        result = target + offset
+        # 限制在7码合理范围内
+        return max(140, min(210, result))
+    elif sum_predict_method == "均值回归":
         lower, upper = get_target_sum_mean_reversion_range(draws, num_count)
     elif sum_predict_method == "移动平均(7期)":
         lower, upper = get_target_sum_moving_average_range(draws)
@@ -4106,24 +4102,37 @@ with col3:
 st.markdown("---")
 st.markdown("**🎯 和值预测参考**")
 
-# 计算三种方法的预测范围
+# 计算四种方法的预测范围
+# 1. 动态回归
+dynamic_target, dynamic_tolerance, _, _, _, _, _ = get_dynamic_sum_range(draws, num_count=7, window=4)
+dynamic_lower = max(140, dynamic_target - dynamic_tolerance)
+dynamic_upper = min(210, dynamic_target + dynamic_tolerance)
+
+# 2. 均值回归
 mean_lower, mean_upper = get_target_sum_mean_reversion_range(draws)
+
+# 3. 移动平均
 ma_lower, ma_upper = get_target_sum_moving_average_range(draws)
+
+# 4. 正弦拟合
 sine_lower, sine_upper = get_target_sum_sine_range(draws)
 
-col1, col2, col3 = st.columns(3)
+# 显示四个指标
+col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("均值回归", f"{mean_lower}-{mean_upper}", delta="±17")
+    st.metric("动态回归", f"{dynamic_lower}-{dynamic_upper}", delta=f"±{dynamic_tolerance}")
 with col2:
-    st.metric("移动平均(7期)", f"{ma_lower}-{ma_upper}", delta="±17")
+    st.metric("均值回归", f"{mean_lower}-{mean_upper}", delta="±17")
 with col3:
+    st.metric("移动平均(7期)", f"{ma_lower}-{ma_upper}", delta="±17")
+with col4:
     st.metric("正弦拟合", f"{sine_lower}-{sine_upper}", delta="±17")
 
-# 和值预测方法选择
+# 和值预测方法选择（添加动态回归选项）
 sum_predict_method = st.radio(
     "选择预测方法（用于选号）",
-    options=["均值回归", "移动平均(7期)", "正弦拟合"],
-    index=1,
+    options=["动态回归", "均值回归", "移动平均(7期)", "正弦拟合"],
+    index=0,  # 默认动态回归
     key="sum_predict_method",
     horizontal=True
 )
