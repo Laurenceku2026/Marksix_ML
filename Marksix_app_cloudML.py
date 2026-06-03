@@ -4703,15 +4703,15 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
     win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
     
-    return {
-        "方法": "方法B: 新胆拖混合",
-        "ROI": roi,
-        "总成本": total_cost,
-        "总奖金": total_prize,
-        "净收益": net,
-        "中奖率": win_rate,
-        "中奖明细": ", ".join(prize_details) if prize_details else "无"
-    }    
+        return {
+            "方法": "方法B: 新胆拖混合",
+            "ROI": roi,
+            "总成本": total_cost,
+            "总奖金": total_prize,
+            "净收益": net,
+            "中奖率": win_rate,
+            "中奖明细": ", ".join(prize_details) if prize_details else "无"
+        }    
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
          # 6种方法列表（根据复选框筛选）
