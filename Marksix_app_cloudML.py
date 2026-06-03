@@ -3424,6 +3424,152 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         "中奖率": win_rate,
         "中奖明细": ", ".join(prize_details) if prize_details else "无"
     }
+#---------------
+# ==================== 方法B：新胆拖混合（基于方法A评分） ====================
+
+def generate_bets_method_b(draws: List[Dict], num_bets: int, num_count: int = 7,
+                           sum_predict_method: str = "移动平均(7期)",
+                           random_seed: Optional[int] = None) -> List[Dict]:
+    """
+    方法B：新胆拖混合（基于方法A评分）
+    
+    逻辑：
+    1. 计算方法A评分
+    2. 从热池评分Top10中随机抽取3个作为胆码
+    3. 从剩余热池（排除Top10）中按概率抽取3个作为热池拖码
+    4. 从冷池中按概率抽取1个作为冷池拖码
+    5. 合并胆码+热池拖码+冷池拖码，和值筛选
+    
+    参数:
+        draws: 历史开奖数据
+        num_bets: 生成组数
+        num_count: 每注号码个数（固定7）
+        sum_predict_method: 和值预测方法
+        random_seed: 随机种子
+    
+    返回:
+        投注列表
+    """
+    # 设置随机种子
+    if random_seed is not None:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+    
+    # 获取方法A的配置（从session_state）
+    zone_bonus_config = {
+        1: st.session_state.get('zone1_bonus', 12),
+        2: st.session_state.get('zone2_bonus', 8),
+        3: st.session_state.get('zone3_bonus', 5),
+        4: st.session_state.get('zone4_bonus', 0),
+        5: st.session_state.get('zone5_bonus', 0),
+        6: st.session_state.get('zone6_bonus', 0),
+        7: st.session_state.get('zone7_bonus', 0),
+    }
+    
+    pattern_config = {
+        "gap_2": st.session_state.get('pattern_gap2', 25),
+        "gap_3": st.session_state.get('pattern_gap3', 12),
+        "edge_normal": st.session_state.get('pattern_edge_normal', 15),
+        "edge_special": st.session_state.get('pattern_edge_special', 10),
+        "consecutive": st.session_state.get('pattern_consecutive', 8),
+        "alternate": st.session_state.get('pattern_alternate', 8),
+        "max": 999  # 无上限
+    }
+    
+    cold_config = {
+        "frequency_acceleration": st.session_state.get('cold_freq_acc', 12),
+        "miss_13_15": st.session_state.get('cold_miss_13_15', 8),
+        "consecutive": st.session_state.get('cold_consecutive', 10),
+        "cold_return": st.session_state.get('cold_return', 8),
+        "cold_neighbor": st.session_state.get('cold_neighbor', 5),
+        "max": st.session_state.get('cold_max', 20),
+    }
+    
+    # 热池遗漏范围
+    hot_range = (st.session_state.get('method_a_hot_range_start', 0),
+                 st.session_state.get('method_a_hot_range_end', 10))
+    zone_window = st.session_state.get('method_a_zone_window', 15)
+    
+    # 计算所有号码的评分
+    all_scores = calculate_all_scores(
+        draws, hot_range, zone_window,
+        zone_bonus_config, pattern_config, cold_config
+    )
+    
+    # 划分池子
+    hot_pool, cold_pool = split_pools_by_absence(draws, hot_range)
+    
+    # 获取热池Top10（评分最高的10个号码）
+    hot_scores = [(num, all_scores[num]) for num in hot_pool]
+    hot_scores.sort(key=lambda x: x[1], reverse=True)
+    top10_hot = [num for num, _ in hot_scores[:10]]
+    
+    # 剩余热池（排除Top10）
+    remaining_hot_pool = [num for num in hot_pool if num not in top10_hot]
+    
+    bets = []
+    base_target = get_target_sum_by_numbers_count(num_count)
+    
+    for i in range(num_bets):
+        # 每注独立生成和值目标
+        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
+        tolerance = 17
+        
+        # 尝试生成符合和值要求的组合
+        max_attempts = 500
+        selected_numbers = None
+        
+        for attempt in range(max_attempts):
+            # 1. 从Top10中随机抽取3个胆码
+            anchors = random.sample(top10_hot, 3)
+            
+            # 2. 从剩余热池中按概率抽取3个拖码
+            # 排除胆码
+            temp_remaining_hot = [n for n in remaining_hot_pool if n not in anchors]
+            hot_selected = select_numbers_from_pool(
+                temp_remaining_hot, all_scores, 3
+            )
+            
+            # 3. 从冷池中按概率抽取1个拖码（排除胆码）
+            temp_cold_pool = [n for n in cold_pool if n not in anchors]
+            if temp_cold_pool:
+                cold_selected = select_numbers_from_pool(
+                    temp_cold_pool, all_scores, 1
+                )
+            else:
+                cold_selected = []
+            
+            # 合并
+            selected = sorted(anchors + hot_selected + cold_selected)
+            
+            # 验证和值
+            if len(selected) == num_count and is_sum_valid(selected, target_sum, tolerance):
+                selected_numbers = selected
+                break
+        
+        # 如果没找到符合和值的，用最后一次生成的
+        if selected_numbers is None:
+            anchors = random.sample(top10_hot, 3)
+            temp_remaining_hot = [n for n in remaining_hot_pool if n not in anchors]
+            hot_selected = select_numbers_from_pool(temp_remaining_hot, all_scores, 3)
+            temp_cold_pool = [n for n in cold_pool if n not in anchors]
+            if temp_cold_pool:
+                cold_selected = select_numbers_from_pool(temp_cold_pool, all_scores, 1)
+            else:
+                cold_selected = []
+            selected_numbers = sorted(anchors + hot_selected + cold_selected)
+        
+        total = sum(selected_numbers)
+        
+        bets.append({
+            'numbers': selected_numbers,
+            'sum': total,
+            'target': f'方法B(目标{target_sum})',
+            'deviation': total - target_sum,
+            'anchors': anchors
+        })
+    
+    return bets
 # --------------------
 print("第3部分加载完成 (v7.1 - 完整回测实现)")
 print("=" * 60)
@@ -3981,6 +4127,7 @@ with col3:
         "🤖 AI预测模型",
         [
             "方法A: 分池评分法 ⭐推荐",
+            "方法B: 新胆拖混合（基于方法A评分）",
             "方法1: 当前方法",
             "方法2: 胆拖混合",
             "方法3: LightGBM",
@@ -4051,7 +4198,6 @@ st.caption(f"💡 **和值预测 ({sum_method_name})**: 范围 {sum_lower}-{sum_
 #------------------
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     # 解析随机种子
-    # 解析随机种子
     random_seed = None
     if seed_mode == "日期+时间":
         if seed_date and seed_time:
@@ -4076,6 +4222,11 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
                 draws, num_bets, num_count, random_seed, sum_predict_method
             )
             model_used = "方法A: 分池评分法"
+        elif "方法B" in ai_model:
+            bets = generate_bets_method_b(
+                draws, num_bets, num_count, sum_predict_method, random_seed
+            )
+            model_used = "方法B: 新胆拖混合（基于方法A评分）"
         elif "方法1" in ai_model:
             bets = generate_bets_method1_current(
                 draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
@@ -4103,6 +4254,9 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             )
             model_used = "方法5: 综合模式"
     
+    st.session_state['generated_bets'] = bets
+    st.session_state['model_used'] = model_used
+    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")    
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
     st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
@@ -4215,7 +4369,9 @@ else:
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
         st.markdown("**📊 回测方法选择**")
-        col_methodA, col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(6)
+        col_methodB, col_methodA, col_method1, col_method2, col_method3, col_method4, col_method5 = st.columns(7)
+        with col_methodB:
+            enable_method_b = st.checkbox("方法B", value=True, key="bt_enable_method_b")
         with col_methodA:
             enable_method_a = st.checkbox("方法A", value=True, key="bt_enable_method_a")
         with col_method1:
@@ -4242,7 +4398,9 @@ else:
         
         # 第二行：训练期数设置（四列并排）
         st.markdown("**📊 训练期数设置**")
-        col_a, col_1, col_3, col_4 = st.columns(4)
+        col_b, col_a, col_1, col_3, col_4 = st.columns(5)
+        with col_b:
+            method_b_window = st.number_input("方法B期数", min_value=50, max_value=500, value=100, step=10, key="bt_method_b_window")
         with col_a:
             method_a_window = st.number_input("方法A期数", min_value=50, max_value=500, value=100, step=10, key="bt_method_a_window")
         with col_1:
@@ -4254,7 +4412,7 @@ else:
         
         # 第三行：回测期数设置
         st.markdown("**📈 回测期数设置**")
-        max_window = max(method_a_window, method1_window, method3_window, method4_window)
+        max_window = max(method_b_window, method_a_window, method1_window, method3_window, method4_window)
         max_backtest_periods = total_draws_count - max_window
         if max_backtest_periods < 1:
             st.error(f"数据不足：需要至少{max_window}期数据，当前只有{total_draws_count}期")
@@ -4447,7 +4605,10 @@ else:
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
          # 6种方法列表（根据复选框筛选）
+        # 7种方法列表（根据复选框筛选）
         methods = []
+        if enable_method_b:
+            methods.append(("方法B: 新胆拖混合", "方法B"))
         if enable_method_a:
             methods.append(("方法A: 分池评分法", "方法A"))
         if enable_method1:
@@ -4473,7 +4634,9 @@ else:
                 status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
                 
                 # 根据方法选择对应的训练窗口
-                if method_key == "方法A":
+                if method_key == "方法B":
+                    bt_window = method_b_window
+                elif method_key == "方法A":
                     bt_window = method_a_window
                 elif method_key in ["方法1", "方法2"]:
                     bt_window = method1_window
@@ -4483,7 +4646,14 @@ else:
                     bt_window = method4_window
                 
                 # 调用回测函数
-                if method_key == "方法A":
+                if method_key == "方法B":
+                    result = run_backtest_method_b(
+                        backtest_draws, test_bets, test_num_count,
+                        test_periods, bt_window,
+                        seed_mode, fixed_seed_value,
+                        sum_predict_method
+                    )
+                elif method_key == "方法A":
                     config = get_method_a_config_from_session()
                     result = run_backtest_method_a(
                         backtest_draws, test_bets, test_num_count,
@@ -4572,12 +4742,13 @@ with st.sidebar:
                 st.success("✅ scikit-learn")
             else:
                 st.error("❌ scikit-learn")
-    
-    with st.expander("📖 六种AI算法对比"):
+    #---------------
+    with st.expander("📖 七种AI算法对比"):
         st.markdown("""
         | 算法 | 核心原理 | 规律加权 |
         |------|---------|---------|
-        | 🌟 方法A | 分池评分+Softmax | ✅ 已集成 |
+        | 🌟 方法A | 分池评分+线性归一化 | ✅ 已集成 |
+        | 🆕 方法B | 新胆拖混合（基于方法A评分） | ✅ 已集成 |
         | 🟢 方法1 | 冷热码+和值 | ✅ 已集成 |
         | 🟡 方法2 | 胆拖混合 | ✅ 已集成 |
         | 🔵 方法3 | LightGBM | 规律特征 |
@@ -4614,6 +4785,115 @@ with st.sidebar:
         """)
         st.caption("基于269期历史数据验证")
 #---------------
+def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window,
+                          seed_mode, fixed_seed_value, sum_predict_method) -> Optional[Dict]:
+    """
+    方法B回测函数（新胆拖混合，基于方法A评分）
+    """
+    if len(draws) < train_window + test_periods:
+        return None
+    
+    method_seed_offset = 600  # 方法B的偏移量
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_details = []
+    
+    from math import comb
+    cost_per_bet = comb(num_count, 6) * 5
+    
+    for i in range(test_periods):
+        train_draws = draws[:-(test_periods - i)]
+        test_draw = draws[-(test_periods - i)]
+        test_period = test_draw.get('period', '')
+        
+        # 设置随机种子
+        if seed_mode == "date":
+            test_date = test_draw.get('date')
+            if test_date:
+                try:
+                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
+                    seed_val += method_seed_offset
+                except:
+                    seed_val = 42 + method_seed_offset + i
+            else:
+                seed_val = 42 + method_seed_offset + i
+        elif seed_mode == "fixed":
+            seed_val = fixed_seed_value + method_seed_offset
+        else:
+            seed_val = random.randint(0, 1000000) + method_seed_offset
+        
+        random.seed(seed_val)
+        np.random.seed(seed_val)
+        
+        # 生成投注
+        bets = generate_bets_method_b(
+            train_draws, num_bets, num_count, sum_predict_method, seed_val
+        )
+        
+        best_prize = 0
+        best_match_score = 0
+        
+        for bet in bets:
+            prize = calculate_7code_prize(bet['numbers'], test_draw)
+            match_score = get_best_match_score(bet['numbers'], test_draw)
+            
+            if prize > best_prize:
+                best_prize = prize
+                best_match_score = match_score
+        
+        total_cost += num_bets * cost_per_bet
+        total_prize += best_prize
+        
+        if best_prize > 0:
+            win_count += 1
+            if best_prize >= 5090000:
+                prize_desc = "509万"
+            elif best_prize >= 1530000:
+                prize_desc = "153万"
+            elif best_prize >= 30800:
+                prize_desc = "3.08万"
+            elif best_prize >= 10560:
+                prize_desc = "10,560"
+            elif best_prize >= 1040:
+                prize_desc = "1,040"
+            elif best_prize >= 4800:
+                prize_desc = "4,800"
+            elif best_prize >= 1600:
+                prize_desc = "1,600"
+            elif best_prize >= 520:
+                prize_desc = "520"
+            elif best_prize >= 320:
+                prize_desc = "320"
+            elif best_prize >= 160:
+                prize_desc = "160"
+            elif best_prize >= 80:
+                prize_desc = "80"
+            else:
+                prize_desc = str(best_prize)
+            
+            if best_match_score == int(best_match_score):
+                match_display = f"{int(best_match_score)}"
+            else:
+                match_display = f"{best_match_score:.1f}"
+            
+            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
+    
+    return {
+        "方法": "方法B: 新胆拖混合",
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": ", ".join(prize_details) if prize_details else "无"
+    }
 #---------------
 
 print("第4部分加载完成 (v7.1 - 修复版)")
