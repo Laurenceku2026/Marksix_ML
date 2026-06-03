@@ -4601,7 +4601,117 @@ else:
             "中奖率": win_rate,
             "中奖明细": ", ".join(prize_details) if prize_details else "无"
         }
-
+#---------
+#---------------
+def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window,
+                          seed_mode, fixed_seed_value, sum_predict_method) -> Optional[Dict]:
+    """
+    方法B回测函数（新胆拖混合，基于方法A评分）
+    """
+    if len(draws) < train_window + test_periods:
+        return None
+    
+    method_seed_offset = 600  # 方法B的偏移量
+    
+    total_cost = 0
+    total_prize = 0
+    win_count = 0
+    prize_details = []
+    
+    from math import comb
+    cost_per_bet = comb(num_count, 6) * 5
+    
+    for i in range(test_periods):
+        train_draws = draws[:-(test_periods - i)]
+        test_draw = draws[-(test_periods - i)]
+        test_period = test_draw.get('period', '')
+        
+        # 设置随机种子
+        if seed_mode == "date":
+            test_date = test_draw.get('date')
+            if test_date:
+                try:
+                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
+                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
+                    seed_val += method_seed_offset
+                except:
+                    seed_val = 42 + method_seed_offset + i
+            else:
+                seed_val = 42 + method_seed_offset + i
+        elif seed_mode == "fixed":
+            seed_val = fixed_seed_value + method_seed_offset
+        else:
+            seed_val = random.randint(0, 1000000) + method_seed_offset
+        
+        random.seed(seed_val)
+        np.random.seed(seed_val)
+        
+        # 生成投注
+        bets = generate_bets_method_b(
+            train_draws, num_bets, num_count, sum_predict_method, seed_val
+        )
+        
+        best_prize = 0
+        best_match_score = 0
+        
+        for bet in bets:
+            prize = calculate_7code_prize(bet['numbers'], test_draw)
+            match_score = get_best_match_score(bet['numbers'], test_draw)
+            
+            if prize > best_prize:
+                best_prize = prize
+                best_match_score = match_score
+        
+        total_cost += num_bets * cost_per_bet
+        total_prize += best_prize
+        
+        if best_prize > 0:
+            win_count += 1
+            if best_prize >= 5090000:
+                prize_desc = "509万"
+            elif best_prize >= 1530000:
+                prize_desc = "153万"
+            elif best_prize >= 30800:
+                prize_desc = "3.08万"
+            elif best_prize >= 10560:
+                prize_desc = "10,560"
+            elif best_prize >= 1040:
+                prize_desc = "1,040"
+            elif best_prize >= 4800:
+                prize_desc = "4,800"
+            elif best_prize >= 1600:
+                prize_desc = "1,600"
+            elif best_prize >= 520:
+                prize_desc = "520"
+            elif best_prize >= 320:
+                prize_desc = "320"
+            elif best_prize >= 160:
+                prize_desc = "160"
+            elif best_prize >= 80:
+                prize_desc = "80"
+            else:
+                prize_desc = str(best_prize)
+            
+            if best_match_score == int(best_match_score):
+                match_display = f"{int(best_match_score)}"
+            else:
+                match_display = f"{best_match_score:.1f}"
+            
+            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
+    
+    net = total_prize - total_cost
+    roi = (net / total_cost) * 100 if total_cost > 0 else 0
+    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
+    
+    return {
+        "方法": "方法B: 新胆拖混合",
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": ", ".join(prize_details) if prize_details else "无"
+    }    
     # ========== 运行回测按钮 ==========
     if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
          # 6种方法列表（根据复选框筛选）
@@ -4784,116 +4894,7 @@ with st.sidebar:
         | 重号(特码) | ×1.15 |
         """)
         st.caption("基于269期历史数据验证")
-#---------------
-def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window,
-                          seed_mode, fixed_seed_value, sum_predict_method) -> Optional[Dict]:
-    """
-    方法B回测函数（新胆拖混合，基于方法A评分）
-    """
-    if len(draws) < train_window + test_periods:
-        return None
-    
-    method_seed_offset = 600  # 方法B的偏移量
-    
-    total_cost = 0
-    total_prize = 0
-    win_count = 0
-    prize_details = []
-    
-    from math import comb
-    cost_per_bet = comb(num_count, 6) * 5
-    
-    for i in range(test_periods):
-        train_draws = draws[:-(test_periods - i)]
-        test_draw = draws[-(test_periods - i)]
-        test_period = test_draw.get('period', '')
-        
-        # 设置随机种子
-        if seed_mode == "date":
-            test_date = test_draw.get('date')
-            if test_date:
-                try:
-                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
-                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
-                    seed_val += method_seed_offset
-                except:
-                    seed_val = 42 + method_seed_offset + i
-            else:
-                seed_val = 42 + method_seed_offset + i
-        elif seed_mode == "fixed":
-            seed_val = fixed_seed_value + method_seed_offset
-        else:
-            seed_val = random.randint(0, 1000000) + method_seed_offset
-        
-        random.seed(seed_val)
-        np.random.seed(seed_val)
-        
-        # 生成投注
-        bets = generate_bets_method_b(
-            train_draws, num_bets, num_count, sum_predict_method, seed_val
-        )
-        
-        best_prize = 0
-        best_match_score = 0
-        
-        for bet in bets:
-            prize = calculate_7code_prize(bet['numbers'], test_draw)
-            match_score = get_best_match_score(bet['numbers'], test_draw)
-            
-            if prize > best_prize:
-                best_prize = prize
-                best_match_score = match_score
-        
-        total_cost += num_bets * cost_per_bet
-        total_prize += best_prize
-        
-        if best_prize > 0:
-            win_count += 1
-            if best_prize >= 5090000:
-                prize_desc = "509万"
-            elif best_prize >= 1530000:
-                prize_desc = "153万"
-            elif best_prize >= 30800:
-                prize_desc = "3.08万"
-            elif best_prize >= 10560:
-                prize_desc = "10,560"
-            elif best_prize >= 1040:
-                prize_desc = "1,040"
-            elif best_prize >= 4800:
-                prize_desc = "4,800"
-            elif best_prize >= 1600:
-                prize_desc = "1,600"
-            elif best_prize >= 520:
-                prize_desc = "520"
-            elif best_prize >= 320:
-                prize_desc = "320"
-            elif best_prize >= 160:
-                prize_desc = "160"
-            elif best_prize >= 80:
-                prize_desc = "80"
-            else:
-                prize_desc = str(best_prize)
-            
-            if best_match_score == int(best_match_score):
-                match_display = f"{int(best_match_score)}"
-            else:
-                match_display = f"{best_match_score:.1f}"
-            
-            prize_details.append(f"{test_period}({match_display}, {prize_desc})")
-    
-    net = total_prize - total_cost
-    roi = (net / total_cost) * 100 if total_cost > 0 else 0
-    win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
-    
-    return {
-        "方法": "方法B: 新胆拖混合",
-        "ROI": roi,
-        "总成本": total_cost,
-        "总奖金": total_prize,
-        "净收益": net,
-        "中奖率": win_rate,
-        "中奖明细": ", ".join(prize_details) if prize_details else "无"
-    }
+
 #---------------
 
 print("第4部分加载完成 (v7.1 - 修复版)")
