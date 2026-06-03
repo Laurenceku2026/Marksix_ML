@@ -3903,7 +3903,7 @@ if len(recent_draws) >= 10:
 import altair as alt
 
 # 绘制实际和值
-chart = alt.Chart(sum_df).mark_line(point=True, color='#ff6b6b').encode(
+chart = alt.Chart(sum_df).mark_line(point=True, color='black').encode(
     x=alt.X('序号:Q', title='期次', axis=alt.Axis(labelAngle=-45, tickCount=10)),
     y=alt.Y('和值(7码):Q', title='和值(7码)'),
     tooltip=['期次', '和值(7码)']
