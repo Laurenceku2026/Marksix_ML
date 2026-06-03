@@ -586,12 +586,11 @@ def get_dynamic_sum_range(draws: List[Dict], num_count: int, window: int = 4, si
     
     return int(target), tolerance, direction, direction_desc, long_term_mean, long_term_std, short_mean
 
-#--------------------
-# ==================== 移动平均和值预测（7期±17） ====================
+# ==================== 移动平均和值预测（7期±17）- 7码和值 ====================
 
 def get_target_sum_moving_average(draws: List[Dict], window: int = 7, tolerance: int = 17) -> Tuple[int, int]:
     """
-    移动平均和值预测
+    移动平均和值预测（7码和值）
     
     返回:
         (中心值, 容差)
@@ -602,8 +601,9 @@ def get_target_sum_moving_average(draws: List[Dict], window: int = 7, tolerance:
     recent_sums = []
     for draw in draws[-window:]:
         numbers = draw.get('numbers', [])
-        if numbers:
-            recent_sums.append(sum(numbers))
+        special = draw.get('special', 0)
+        sum_7 = sum(numbers) + special  # 7码和值
+        recent_sums.append(sum_7)
     
     if not recent_sums:
         return 175, tolerance
@@ -613,10 +613,10 @@ def get_target_sum_moving_average(draws: List[Dict], window: int = 7, tolerance:
 
 
 def get_target_sum_moving_average_range(draws: List[Dict], window: int = 7, tolerance: int = 17) -> Tuple[int, int]:
-    """移动平均和值范围预测"""
+    """移动平均和值范围预测（7码和值）"""
     center, tol = get_target_sum_moving_average(draws, window, tolerance)
-    lower = max(80, center - tol)
-    upper = min(260, center + tol)
+    lower = max(140, center - tol)  # 7码最低140
+    upper = min(210, center + tol)  # 7码最高210
     return lower, upper
 
 
@@ -628,9 +628,11 @@ def generate_target_sum_by_moving_average(draws: List[Dict]) -> int:
 
 # ==================== 正弦拟合和值预测（±17） ====================
 
+# ==================== 正弦拟合和值预测（±17）- 7码和值 ====================
+
 def sine_fit_predict_sum_marksix(recent_sums: List[int]) -> int:
     """
-    正弦拟合预测下一期和值（六合彩专用）
+    正弦拟合预测下一期和值（7码和值）
     """
     from scipy.optimize import curve_fit
     
@@ -661,22 +663,23 @@ def sine_fit_predict_sum_marksix(recent_sums: List[int]) -> int:
 
 
 def get_target_sum_sine_range(draws: List[Dict], tolerance: int = 17) -> Tuple[int, int]:
-    """正弦拟合和值范围预测"""
+    """正弦拟合和值范围预测（7码和值）"""
     if len(draws) < 10:
-        return 158, 192
+        return 158, 192  # 7码范围
     
     recent_sums = []
     for draw in draws[-10:]:
         numbers = draw.get('numbers', [])
-        if numbers:
-            recent_sums.append(sum(numbers))
+        special = draw.get('special', 0)
+        sum_7 = sum(numbers) + special  # 7码和值
+        recent_sums.append(sum_7)
     
     if len(recent_sums) < 10:
         return 158, 192
     
     target = sine_fit_predict_sum_marksix(recent_sums)
-    lower = max(80, target - tolerance)
-    upper = min(260, target + tolerance)
+    lower = max(140, target - tolerance)
+    upper = min(210, target + tolerance)
     
     return lower, upper
 
@@ -686,12 +689,11 @@ def generate_target_sum_by_sine(draws: List[Dict]) -> int:
     lower, upper = get_target_sum_sine_range(draws)
     return random.randint(lower, upper)
 
-
-# ==================== 修改均值回归函数的容差为±17 ====================
+# ==================== 均值回归和值预测（容差±17）- 7码和值 ====================
 
 def get_target_sum_mean_reversion(draws: List[Dict], num_count: int = 7, tolerance: int = 17) -> Tuple[int, int]:
     """
-    均值回归和值预测（修改版，容差±17）
+    均值回归和值预测（7码和值）
     
     返回:
         (目标值, 容差)
@@ -699,15 +701,25 @@ def get_target_sum_mean_reversion(draws: List[Dict], num_count: int = 7, toleran
     if len(draws) < 10:
         return 175, tolerance
     
-    # 计算长期均值（最近100期）
+    # 计算长期均值（最近100期7码和值）
     recent_draws = draws[-100:] if len(draws) >= 100 else draws
-    all_sums = [sum(d.get('numbers', [])) for d in recent_draws]
+    all_sums = []
+    for d in recent_draws:
+        numbers = d.get('numbers', [])
+        special = d.get('special', 0)
+        sum_7 = sum(numbers) + special
+        all_sums.append(sum_7)
     long_term_mean = np.mean(all_sums) if all_sums else 175
     long_term_std = np.std(all_sums) if len(all_sums) > 1 else 20
     
-    # 短期均值（最近4期）
+    # 短期均值（最近4期7码和值）
     short_draws = draws[-4:] if len(draws) >= 4 else draws
-    short_sums = [sum(d.get('numbers', [])) for d in short_draws]
+    short_sums = []
+    for d in short_draws:
+        numbers = d.get('numbers', [])
+        special = d.get('special', 0)
+        sum_7 = sum(numbers) + special
+        short_sums.append(sum_7)
     short_mean = np.mean(short_sums) if short_sums else long_term_mean
     
     # 判断方向
@@ -726,10 +738,10 @@ def get_target_sum_mean_reversion(draws: List[Dict], num_count: int = 7, toleran
 
 
 def get_target_sum_mean_reversion_range(draws: List[Dict], num_count: int = 7, tolerance: int = 17) -> Tuple[int, int]:
-    """均值回归和值范围预测"""
+    """均值回归和值范围预测（7码和值）"""
     target, tol = get_target_sum_mean_reversion(draws, num_count, tolerance)
-    lower = max(80, target - tol)
-    upper = min(260, target + tol)
+    lower = max(140, target - tol)
+    upper = min(210, target + tol)
     return lower, upper
 
 
