@@ -4703,134 +4703,134 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
     roi = (net / total_cost) * 100 if total_cost > 0 else 0
     win_rate = (win_count / test_periods) * 100 if test_periods > 0 else 0
     
-        return {
-            "方法": "方法B: 新胆拖混合",
-            "ROI": roi,
-            "总成本": total_cost,
-            "总奖金": total_prize,
-            "净收益": net,
-            "中奖率": win_rate,
-            "中奖明细": ", ".join(prize_details) if prize_details else "无"
-        }    
-    # ========== 运行回测按钮 ==========
-    if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
-         # 6种方法列表（根据复选框筛选）
-        # 7种方法列表（根据复选框筛选）
-        methods = []
-        if enable_method_b:
-            methods.append(("方法B: 新胆拖混合", "方法B"))
-        if enable_method_a:
-            methods.append(("方法A: 分池评分法", "方法A"))
-        if enable_method1:
-            methods.append(("方法1: 当前方法", "方法1"))
-        if enable_method2:
-            methods.append(("方法2: 胆拖混合", "方法2"))
-        if enable_method3:
-            methods.append(("方法3: LightGBM", "方法3"))
-        if enable_method4:
-            methods.append(("方法4: XGBoost+NN", "方法4"))
-        if enable_method5:
-            methods.append(("方法5: 综合模式", "方法5"))
+    return {
+        "方法": "方法B: 新胆拖混合",
+        "ROI": roi,
+        "总成本": total_cost,
+        "总奖金": total_prize,
+        "净收益": net,
+        "中奖率": win_rate,
+        "中奖明细": ", ".join(prize_details) if prize_details else "无"
+    }
+
+# ========== 运行回测按钮 ==========
+if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_all"):
+    # 7种方法列表（根据复选框筛选）
+    methods = []
+    if enable_method_b:
+        methods.append(("方法B: 新胆拖混合", "方法B"))
+    if enable_method_a:
+        methods.append(("方法A: 分池评分法", "方法A"))
+    if enable_method1:
+        methods.append(("方法1: 当前方法", "方法1"))
+    if enable_method2:
+        methods.append(("方法2: 胆拖混合", "方法2"))
+    if enable_method3:
+        methods.append(("方法3: LightGBM", "方法3"))
+    if enable_method4:
+        methods.append(("方法4: XGBoost+NN", "方法4"))
+    if enable_method5:
+        methods.append(("方法5: 综合模式", "方法5"))
+    
+    if not methods:
+        st.warning("请至少选择一种回测方法")
+    else:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        if not methods:
-            st.warning("请至少选择一种回测方法")
-        else:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        all_results = []
+        
+        for idx, (display_name, method_key) in enumerate(methods):
+            status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
             
-            all_results = []
+            # 根据方法选择对应的训练窗口
+            if method_key == "方法B":
+                bt_window = method_b_window
+            elif method_key == "方法A":
+                bt_window = method_a_window
+            elif method_key in ["方法1", "方法2"]:
+                bt_window = method1_window
+            elif method_key == "方法3":
+                bt_window = method3_window
+            else:
+                bt_window = method4_window
             
-            for idx, (display_name, method_key) in enumerate(methods):
-                status_text.text(f"正在回测 {display_name}... ({idx+1}/{len(methods)})")
-                
-                # 根据方法选择对应的训练窗口
-                if method_key == "方法B":
-                    bt_window = method_b_window
-                elif method_key == "方法A":
-                    bt_window = method_a_window
-                elif method_key in ["方法1", "方法2"]:
-                    bt_window = method1_window
-                elif method_key == "方法3":
-                    bt_window = method3_window
-                else:
-                    bt_window = method4_window
-                
-                # 调用回测函数
-                if method_key == "方法B":
-                    result = run_backtest_method_b(
-                        backtest_draws, test_bets, test_num_count,
-                        test_periods, bt_window,
-                        seed_mode, fixed_seed_value,
-                        sum_predict_method
-                    )
-                elif method_key == "方法A":
-                    config = get_method_a_config_from_session()
-                    result = run_backtest_method_a(
-                        backtest_draws, test_bets, test_num_count,
-                        test_periods, bt_window,
-                        seed_mode, fixed_seed_value,
-                        sum_predict_method,
-                        hot_count=config.hot_count,
-                        cold_count=config.cold_count,
-                        hot_range=config.hot_range,
-                        hot_temperature=config.hot_temperature,
-                        cold_temperature=config.cold_temperature,
-                        zone_window=config.zone_window
-                    )
-                else:
-                    result = run_backtest_single_method(
-                        backtest_draws, method_key, test_bets, test_num_count,
-                        test_trend_window, test_periods, bt_window,
-                        seed_mode, fixed_seed_value,
-                        sum_predict_method
-                    )
-                
-                if result:
-                    all_results.append(result)
-                
-                progress_bar.progress((idx + 1) / len(methods))
-            
-            status_text.text("回测完成！")
-            progress_bar.empty()
-            
-            # 显示结果表格
-            if all_results:
-                df_results = pd.DataFrame(all_results)
-                
-                st.dataframe(
-                    df_results.style.format({
-                        'ROI': '{:.1f}%',
-                        '总成本': '¥{:.0f}',
-                        '总奖金': '¥{:.0f}',
-                        '净收益': '¥{:.0f}',
-                        '中奖率': '{:.1f}%'
-                    }),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
-                    }
+            # 调用回测函数
+            if method_key == "方法B":
+                result = run_backtest_method_b(
+                    backtest_draws, test_bets, test_num_count,
+                    test_periods, bt_window,
+                    seed_mode, fixed_seed_value,
+                    sum_predict_method
                 )
-                
-                best_roi = all_results[0]['ROI']
-                best_method = all_results[0]['方法']
-                for r in all_results:
-                    if r['ROI'] > best_roi:
-                        best_roi = r['ROI']
-                        best_method = r['方法']
-                
-                st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
-                st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
+            elif method_key == "方法A":
+                config = get_method_a_config_from_session()
+                result = run_backtest_method_a(
+                    backtest_draws, test_bets, test_num_count,
+                    test_periods, bt_window,
+                    seed_mode, fixed_seed_value,
+                    sum_predict_method,
+                    hot_count=config.hot_count,
+                    cold_count=config.cold_count,
+                    hot_range=config.hot_range,
+                    hot_temperature=config.hot_temperature,
+                    cold_temperature=config.cold_temperature,
+                    zone_window=config.zone_window
+                )
+            else:
+                result = run_backtest_single_method(
+                    backtest_draws, method_key, test_bets, test_num_count,
+                    test_trend_window, test_periods, bt_window,
+                    seed_mode, fixed_seed_value,
+                    sum_predict_method
+                )
+            
+            if result:
+                all_results.append(result)
+            
+            progress_bar.progress((idx + 1) / len(methods))
+        
+        status_text.text("回测完成！")
+        progress_bar.empty()
+        
+        # 显示结果表格
+        if all_results:
+            df_results = pd.DataFrame(all_results)
+            
+            st.dataframe(
+                df_results.style.format({
+                    'ROI': '{:.1f}%',
+                    '总成本': '¥{:.0f}',
+                    '总奖金': '¥{:.0f}',
+                    '净收益': '¥{:.0f}',
+                    '中奖率': '{:.1f}%'
+                }),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    '中奖明细': st.column_config.TextColumn('中奖明细', width='large')
+                }
+            )
+            
+            best_roi = all_results[0]['ROI']
+            best_method = all_results[0]['方法']
+            for r in all_results:
+                if r['ROI'] > best_roi:
+                    best_roi = r['ROI']
+                    best_method = r['方法']
+            
+            st.success(f"🏆 最佳表现: {best_method} (ROI: {best_roi:.1f}%)")
+            st.caption(f"📅 基于最近{test_periods}期回测，每期{test_bets}组{test_num_count}码复式")    
+
 #---------------------------------
-    st.markdown("---")
-    st.caption("DFSS智能选号工具 v7.1")
-    st.caption("更新: 2026-05-13")
-    st.caption("修复: 数据排序 | 日期格式 | 回测完整实现")
+st.markdown("---")
+st.caption("DFSS智能选号工具 v7.1")
+st.caption("更新: 2026-05-13")
+st.caption("修复: 数据排序 | 日期格式 | 回测完整实现")
 
 # ==================== 底部 ====================
 st.markdown("---")
 st.caption("⚠️ 本工具仅供学术研究和娱乐参考。六合彩本质上是一种随机游戏，长期期望值为负，请理性投注。")
-
 # ==================== 侧边栏 ====================
 with st.sidebar:
     st.markdown("### 🎰 六合彩AI分析工具 v7.1")
