@@ -1387,7 +1387,7 @@ def generate_bets_method_a(draws: List[Dict], num_bets: int, num_count: int = 7,
         tolerance = 17  # 默认容差
         
         # 尝试生成符合和值要求的组合
-        max_attempts = 500
+        max_attempts = 3000
         selected_numbers = None
         
         for attempt in range(max_attempts):
@@ -2382,13 +2382,13 @@ def is_valid_combination(nums: List[int], target_sum: int, tolerance: int) -> bo
 def generate_one_combination(weights: Dict[int, float], num_count: int, target_sum: int, 
                               tolerance: int) -> Tuple[List[int], int]:
     """生成一组投注"""
-    max_attempts = 10000
+    max_attempts = 3000
     for _ in range(max_attempts):
         selected = weighted_random_sample(weights, k=num_count)
         if is_valid_combination(selected, target_sum, tolerance):
             return selected, sum(selected)
     
-    for _ in range(5000):
+    for _ in range(1000):
         selected = weighted_random_sample(weights, k=num_count)
         total = sum(selected)
         if abs(total - target_sum) <= tolerance + 5:
@@ -2705,9 +2705,9 @@ def predict_with_lightgbm(model: Any, draws: List[Dict]) -> Optional[List[int]]:
 def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
                                      lightgbm_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
-    """方法3：LightGBM（支持可配置训练期数）"""
+    """方法3：LightGBM（支持可配置训练期数）- 添加和值筛选"""
     if not LGB_AVAILABLE:
-        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50)
+        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50, sum_predict_method)
     
     if random_seed is not None:
         random.seed(random_seed)
@@ -2719,35 +2719,89 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
     model = train_lightgbm_model(draws, lookback=lightgbm_lookback)
     
     if model is None:
-        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50)
+        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50, sum_predict_method)
     
     predicted_numbers = predict_with_lightgbm(model, draws)
     if predicted_numbers is None or len(predicted_numbers) < num_count:
         predicted_numbers = list(range(1, num_count + 1))
     
-    target_sum, tolerance, direction, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=trend_window)
     base_target = get_target_sum_by_numbers_count(num_count)
     
     bets = []
     for i in range(num_bets):
-        nums = predicted_numbers[:]
-        if len(nums) < num_count:
-            extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
-            nums.extend(extra)
+        # 每注独立生成和值目标
+        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
+        tolerance = 17
+        max_attempts = 500
         
-        replace_count = max(1, int(num_count * 0.2))
-        for _ in range(replace_count):
-            idx = random.randint(0, len(nums) - 1)
-            new_num = random.randint(1, 49)
-            while new_num in nums:
+        selected_numbers = None
+        
+        # 第1轮：正常容差
+        for attempt in range(max_attempts):
+            nums = predicted_numbers[:]
+            if len(nums) < num_count:
+                extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                nums.extend(extra)
+            
+            replace_count = max(1, int(num_count * 0.2))
+            for _ in range(replace_count):
+                idx = random.randint(0, len(nums) - 1)
                 new_num = random.randint(1, 49)
-            nums[idx] = new_num
+                while new_num in nums:
+                    new_num = random.randint(1, 49)
+                nums[idx] = new_num
+            
+            nums = sorted(nums[:num_count])
+            total = sum(nums)
+            
+            if abs(total - target_sum) <= tolerance:
+                selected_numbers = nums
+                break
         
-        nums = sorted(nums[:num_count])
-        total = sum(nums)
+        # 第2轮：放宽容差到 ±25
+        if selected_numbers is None:
+            for attempt in range(max_attempts):
+                nums = predicted_numbers[:]
+                if len(nums) < num_count:
+                    extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                    nums.extend(extra)
+                
+                replace_count = max(1, int(num_count * 0.2))
+                for _ in range(replace_count):
+                    idx = random.randint(0, len(nums) - 1)
+                    new_num = random.randint(1, 49)
+                    while new_num in nums:
+                        new_num = random.randint(1, 49)
+                    nums[idx] = new_num
+                
+                nums = sorted(nums[:num_count])
+                total = sum(nums)
+                
+                if abs(total - target_sum) <= 25:
+                    selected_numbers = nums
+                    break
+        
+        # 第3轮：保底
+        if selected_numbers is None:
+            nums = predicted_numbers[:]
+            if len(nums) < num_count:
+                extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                nums.extend(extra)
+            
+            replace_count = max(1, int(num_count * 0.2))
+            for _ in range(replace_count):
+                idx = random.randint(0, len(nums) - 1)
+                new_num = random.randint(1, 49)
+                while new_num in nums:
+                    new_num = random.randint(1, 49)
+                nums[idx] = new_num
+            
+            selected_numbers = sorted(nums[:num_count])
+        
+        total = sum(selected_numbers)
         
         bets.append({
-            'numbers': nums,
+            'numbers': selected_numbers,
             'sum': total,
             'target': f'LightGBM(目标{target_sum})',
             'deviation': total - base_target
@@ -2941,13 +2995,13 @@ def predict_with_ensemble(model_dict: Dict, draws: List[Dict]) -> Optional[List[
         print(f"集成预测失败: {e}")
         return None
 
-
+#------------------
 def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
                                      ensemble_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
-    """方法4：XGBoost + 神经网络集成（支持可配置训练期数）"""
+    """方法4：XGBoost + 神经网络集成（支持可配置训练期数）- 添加和值筛选"""
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
-        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100)
+        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
     if random_seed is not None:
         random.seed(random_seed)
@@ -2955,39 +3009,93 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
     else:
         random.seed()
         np.random.seed()
-    #---
+    
     ensemble = train_xgboost_nn_ensemble(draws, lookback=ensemble_lookback)
     
     if ensemble is None:
-        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100)
+        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
     predicted_numbers = predict_with_ensemble(ensemble, draws)
     if predicted_numbers is None or len(predicted_numbers) < num_count:
         predicted_numbers = list(range(1, num_count + 1))
     
-    target_sum, tolerance, direction, _, _, _, _ = get_dynamic_sum_range(draws, num_count, window=trend_window)
     base_target = get_target_sum_by_numbers_count(num_count)
     
     bets = []
     for i in range(num_bets):
-        nums = predicted_numbers[:]
-        if len(nums) < num_count:
-            extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
-            nums.extend(extra)
+        # 每注独立生成和值目标
+        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
+        tolerance = 17
+        max_attempts = 500
         
-        replace_count = max(1, int(num_count * 0.1))
-        for _ in range(replace_count):
-            idx = random.randint(0, len(nums) - 1)
-            new_num = random.randint(1, 49)
-            while new_num in nums:
+        selected_numbers = None
+        
+        # 第1轮：正常容差
+        for attempt in range(max_attempts):
+            nums = predicted_numbers[:]
+            if len(nums) < num_count:
+                extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                nums.extend(extra)
+            
+            replace_count = max(1, int(num_count * 0.1))
+            for _ in range(replace_count):
+                idx = random.randint(0, len(nums) - 1)
                 new_num = random.randint(1, 49)
-            nums[idx] = new_num
+                while new_num in nums:
+                    new_num = random.randint(1, 49)
+                nums[idx] = new_num
+            
+            nums = sorted(nums[:num_count])
+            total = sum(nums)
+            
+            if abs(total - target_sum) <= tolerance:
+                selected_numbers = nums
+                break
         
-        nums = sorted(nums[:num_count])
-        total = sum(nums)
+        # 第2轮：放宽容差到 ±25
+        if selected_numbers is None:
+            for attempt in range(max_attempts):
+                nums = predicted_numbers[:]
+                if len(nums) < num_count:
+                    extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                    nums.extend(extra)
+                
+                replace_count = max(1, int(num_count * 0.1))
+                for _ in range(replace_count):
+                    idx = random.randint(0, len(nums) - 1)
+                    new_num = random.randint(1, 49)
+                    while new_num in nums:
+                        new_num = random.randint(1, 49)
+                    nums[idx] = new_num
+                
+                nums = sorted(nums[:num_count])
+                total = sum(nums)
+                
+                if abs(total - target_sum) <= 25:
+                    selected_numbers = nums
+                    break
+        
+        # 第3轮：保底
+        if selected_numbers is None:
+            nums = predicted_numbers[:]
+            if len(nums) < num_count:
+                extra = random.sample([n for n in range(1, 50) if n not in nums], num_count - len(nums))
+                nums.extend(extra)
+            
+            replace_count = max(1, int(num_count * 0.1))
+            for _ in range(replace_count):
+                idx = random.randint(0, len(nums) - 1)
+                new_num = random.randint(1, 49)
+                while new_num in nums:
+                    new_num = random.randint(1, 49)
+                nums[idx] = new_num
+            
+            selected_numbers = sorted(nums[:num_count])
+        
+        total = sum(selected_numbers)
         
         bets.append({
-            'numbers': nums,
+            'numbers': selected_numbers,
             'sum': total,
             'target': f'XGBoost+NN(目标{target_sum})',
             'deviation': total - base_target
@@ -3001,7 +3109,7 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
                                      trend_window: int, random_seed: Optional[int],
                                      method1_window: int = 50, method2_window: int = 50,
                                      method3_window: int = 100, method4_window: int = 200) -> List[Dict]:
-    """方法5：综合模式（运行方法1-4，取高频号码 + 规律加权）"""
+    """方法5：综合模式（运行方法1-4，取高频号码 + 规律加权）- 添加和值筛选"""
     if random_seed is not None:
         random.seed(random_seed)
         np.random.seed(random_seed)
@@ -3012,22 +3120,22 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     all_numbers = []
     
     # 方法1
-    bets1 = generate_bets_method1_current(draws, num_bets, num_count, trend_window, random_seed, method1_window)
+    bets1 = generate_bets_method1_current(draws, num_bets, num_count, trend_window, random_seed, method1_window, "移动平均(7期)")
     for bet in bets1:
         all_numbers.extend(bet['numbers'])
     
     # 方法2
-    bets2 = generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, method2_window)
+    bets2 = generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, method2_window, "移动平均(7期)")
     for bet in bets2:
         all_numbers.extend(bet['numbers'])
     
     # 方法3
-    bets3 = generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, method3_window)
+    bets3 = generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, method3_window, "移动平均(7期)")
     for bet in bets3:
         all_numbers.extend(bet['numbers'])
     
     # 方法4
-    bets4 = generate_bets_method4_ensemble(draws, num_bets, num_count, trend_window, random_seed, method4_window)
+    bets4 = generate_bets_method4_ensemble(draws, num_bets, num_count, trend_window, random_seed, method4_window, "移动平均(7期)")
     for bet in bets4:
         all_numbers.extend(bet['numbers'])
     
@@ -3049,25 +3157,69 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     top_numbers = sorted(weighted_scores.items(), key=lambda x: x[1], reverse=True)[:num_count]
     final_numbers = sorted([num for num, _ in top_numbers])
     
-    # 生成多组（通过微调）
+    base_target = get_target_sum_by_numbers_count(num_count)
+    
     bets = []
     for i in range(num_bets):
-        nums = final_numbers.copy()
+        # 每注独立生成和值目标
+        target_sum = get_sum_target_for_method_a(draws, num_count, "移动平均(7期)")
+        tolerance = 17
+        max_attempts = 500
         
-        if i > 0:
-            replace_count = min(i, 2)
-            for _ in range(replace_count):
-                idx = random.randint(0, len(nums) - 1)
-                candidates = [n for n in range(1, 50) if n not in nums]
-                if candidates:
-                    nums[idx] = random.choice(candidates)
-            nums = sorted(nums)
+        selected_numbers = None
         
-        total = sum(nums)
-        base_target = get_target_sum_by_numbers_count(num_count)
+        # 第1轮：正常容差
+        for attempt in range(max_attempts):
+            nums = final_numbers.copy()
+            if i > 0:
+                replace_count = min(i, 2)
+                for _ in range(replace_count):
+                    idx = random.randint(0, len(nums) - 1)
+                    candidates = [n for n in range(1, 50) if n not in nums]
+                    if candidates:
+                        nums[idx] = random.choice(candidates)
+                nums = sorted(nums)
+            
+            total = sum(nums)
+            if abs(total - target_sum) <= tolerance:
+                selected_numbers = nums
+                break
+        
+        # 第2轮：放宽容差到 ±25
+        if selected_numbers is None:
+            for attempt in range(max_attempts):
+                nums = final_numbers.copy()
+                if i > 0:
+                    replace_count = min(i, 2)
+                    for _ in range(replace_count):
+                        idx = random.randint(0, len(nums) - 1)
+                        candidates = [n for n in range(1, 50) if n not in nums]
+                        if candidates:
+                            nums[idx] = random.choice(candidates)
+                    nums = sorted(nums)
+                
+                total = sum(nums)
+                if abs(total - target_sum) <= 25:
+                    selected_numbers = nums
+                    break
+        
+        # 第3轮：保底
+        if selected_numbers is None:
+            nums = final_numbers.copy()
+            if i > 0:
+                replace_count = min(i, 2)
+                for _ in range(replace_count):
+                    idx = random.randint(0, len(nums) - 1)
+                    candidates = [n for n in range(1, 50) if n not in nums]
+                    if candidates:
+                        nums[idx] = random.choice(candidates)
+                nums = sorted(nums)
+            selected_numbers = nums
+        
+        total = sum(selected_numbers)
         
         bets.append({
-            'numbers': nums,
+            'numbers': selected_numbers,
             'sum': total,
             'target': '方法5:综合模式',
             'deviation': total - base_target
@@ -3516,7 +3668,7 @@ def generate_bets_method_b(draws: List[Dict], num_bets: int, num_count: int = 7,
         tolerance = 17
         
         # 尝试生成符合和值要求的组合
-        max_attempts = 500
+        max_attempts = 3000
         selected_numbers = None
         
         for attempt in range(max_attempts):
