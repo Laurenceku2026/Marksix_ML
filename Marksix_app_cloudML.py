@@ -2716,7 +2716,9 @@ def predict_with_lightgbm(model: Any, draws: List[Dict]) -> Optional[List[int]]:
 def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
                                      lightgbm_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
-    """方法3：LightGBM（支持可配置训练期数）- 添加和值筛选"""
+    """
+    方法3：LightGBM - 添加和值筛选（500次 + 降级策略）
+    """
     if not LGB_AVAILABLE:
         return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50, sum_predict_method)
     
@@ -2737,17 +2739,16 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
         predicted_numbers = list(range(1, num_count + 1))
     
     base_target = get_target_sum_by_numbers_count(num_count)
+    max_attempts = 500
     
     bets = []
     for i in range(num_bets):
         # 每注独立生成和值目标
-        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
-        tolerance = 17
-        max_attempts = 500
+        target_sum = get_sum_target_by_method(draws, num_count, trend_window, sum_predict_method)
         
         selected_numbers = None
         
-        # 第1轮：正常容差
+        # 第1轮：正常容差（±17）
         for attempt in range(max_attempts):
             nums = predicted_numbers[:]
             if len(nums) < num_count:
@@ -2765,7 +2766,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
             nums = sorted(nums[:num_count])
             total = sum(nums)
             
-            if abs(total - target_sum) <= tolerance:
+            if abs(total - target_sum) <= 17:
                 selected_numbers = nums
                 break
         
@@ -2792,7 +2793,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
                     selected_numbers = nums
                     break
         
-        # 第3轮：保底
+        # 第3轮：保底（无和值筛选）
         if selected_numbers is None:
             nums = predicted_numbers[:]
             if len(nums) < num_count:
@@ -3010,7 +3011,9 @@ def predict_with_ensemble(model_dict: Dict, draws: List[Dict]) -> Optional[List[
 def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
                                      ensemble_lookback: int = 100, sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
-    """方法4：XGBoost + 神经网络集成（支持可配置训练期数）- 添加和值筛选"""
+    """
+    方法4：XGBoost + 神经网络集成 - 添加和值筛选（500次 + 降级策略）
+    """
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
@@ -3031,17 +3034,16 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
         predicted_numbers = list(range(1, num_count + 1))
     
     base_target = get_target_sum_by_numbers_count(num_count)
+    max_attempts = 500
     
     bets = []
     for i in range(num_bets):
         # 每注独立生成和值目标
-        target_sum = get_sum_target_for_method_a(draws, num_count, sum_predict_method)
-        tolerance = 17
-        max_attempts = 500
+        target_sum = get_sum_target_by_method(draws, num_count, trend_window, sum_predict_method)
         
         selected_numbers = None
         
-        # 第1轮：正常容差
+        # 第1轮：正常容差（±17）
         for attempt in range(max_attempts):
             nums = predicted_numbers[:]
             if len(nums) < num_count:
@@ -3059,7 +3061,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
             nums = sorted(nums[:num_count])
             total = sum(nums)
             
-            if abs(total - target_sum) <= tolerance:
+            if abs(total - target_sum) <= 17:
                 selected_numbers = nums
                 break
         
@@ -3086,7 +3088,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
                     selected_numbers = nums
                     break
         
-        # 第3轮：保底
+        # 第3轮：保底（无和值筛选）
         if selected_numbers is None:
             nums = predicted_numbers[:]
             if len(nums) < num_count:
@@ -3120,7 +3122,9 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
                                      trend_window: int, random_seed: Optional[int],
                                      method1_window: int = 50, method2_window: int = 50,
                                      method3_window: int = 100, method4_window: int = 200) -> List[Dict]:
-    """方法5：综合模式（运行方法1-4，取高频号码 + 规律加权）- 添加和值筛选"""
+    """
+    方法5：综合模式（运行方法1-4，取高频号码 + 规律加权）- 添加和值筛选
+    """
     if random_seed is not None:
         random.seed(random_seed)
         np.random.seed(random_seed)
@@ -3169,17 +3173,16 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     final_numbers = sorted([num for num, _ in top_numbers])
     
     base_target = get_target_sum_by_numbers_count(num_count)
+    max_attempts = 500
     
     bets = []
     for i in range(num_bets):
         # 每注独立生成和值目标
-        target_sum = get_sum_target_for_method_a(draws, num_count, "移动平均(7期)")
-        tolerance = 17
-        max_attempts = 500
+        target_sum = get_sum_target_by_method(draws, num_count, trend_window, "移动平均(7期)")
         
         selected_numbers = None
         
-        # 第1轮：正常容差
+        # 第1轮：正常容差（±17）
         for attempt in range(max_attempts):
             nums = final_numbers.copy()
             if i > 0:
@@ -3192,7 +3195,7 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
                 nums = sorted(nums)
             
             total = sum(nums)
-            if abs(total - target_sum) <= tolerance:
+            if abs(total - target_sum) <= 17:
                 selected_numbers = nums
                 break
         
@@ -3214,7 +3217,7 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
                     selected_numbers = nums
                     break
         
-        # 第3轮：保底
+        # 第3轮：保底（无和值筛选）
         if selected_numbers is None:
             nums = final_numbers.copy()
             if i > 0:
