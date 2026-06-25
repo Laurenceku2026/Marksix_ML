@@ -4495,8 +4495,9 @@ if st.session_state['generated_bets'] is not None:
 # ==================== 多期查奖 ====================
 st.markdown("---")
 st.markdown("### 🔍 多期查奖")
-st.caption("📌 粘贴实际开奖数据，查看每组复式中奖情况（最多5期）")
+st.caption("📌 粘贴实际开奖数据（最多5期），下方 Tab 选择比对来源")
 
+# ---------- 公用区域：粘贴多期开奖数据 ----------
 check_draws_text = st.text_area(
     "📋 粘贴多期开奖数据（最多5期）",
     height=120,
@@ -4504,39 +4505,83 @@ check_draws_text = st.text_area(
     placeholder="示例:\n26045 2026-04-25 4 16 21 36 42 46 9\n26044 2026-04-23 12 23 37 38 45 48 8"
 )
 
-def calculate_match_score_for_draws(bet_numbers: List[int], check_draws: List[Dict]) -> List[str]:
-    """计算多期中奖分数"""
+# ========== 辅助函数：解析用户自定义投注 ==========
+def parse_custom_bets(text: str) -> List[List[int]]:
+    """解析用户输入的自定义投注，每行一注，返回号码列表的列表"""
+    bets = []
+    lines = text.strip().split('\n')
+    for line in lines:
+        if not line.strip():
+            continue
+        # 清洗分隔符（支持中文逗号、顿号、空格、英文逗号）
+        clean_line = line.replace('，', ',').replace('、', ',').replace(' ', ',')
+        parts = [p.strip() for p in clean_line.split(',') if p.strip()]
+        nums = []
+        valid = True
+        for p in parts:
+            try:
+                num = int(p)
+                if 1 <= num <= 49:
+                    nums.append(num)
+                else:
+                    valid = False
+                    break
+            except ValueError:
+                valid = False
+                break
+        # 去重并排序，检查数量（6-49个）
+        nums = sorted(set(nums))
+        if valid and 6 <= len(nums) <= 49:
+            bets.append(nums)
+    return bets
+
+# ========== 辅助函数：计算自定义组合的匹配分数（通用版） ==========
+def calculate_custom_match_scores(bet_numbers: List[int], check_draws: List[Dict]) -> List[str]:
+    """
+    计算自定义投注在每期开奖中的匹配分数
+    规则：命中正码个数 + (命中特码 ? 0.5 : 0)
+    """
     results = []
+    bet_set = set(bet_numbers)
     for draw in check_draws:
-        draw_numbers = set(draw['numbers'])
-        draw_special = draw.get('special')
+        draw_numbers = set(draw['numbers'])  # 6个正码
+        draw_special = draw.get('special')   # 特码
         
-        main_matches = len(set(bet_numbers[:6]) & draw_numbers)
-        special_match = (len(bet_numbers) >= 7 and bet_numbers[6] == draw_special) if draw_special else False
-        
-        if special_match:
-            score = main_matches + 0.5
-        else:
-            score = float(main_matches)
+        # 命中正码个数
+        main_hits = len(bet_set & draw_numbers)
+        # 是否命中特码（加0.5）
+        special_hit = 0.5 if draw_special in bet_set else 0
+        score = main_hits + special_hit
         
         if score == int(score):
             results.append(str(int(score)))
         else:
             results.append(f"{score:.1f}")
-    
     return results
 
-if st.button("🔍 查奖", key="check_btn") and check_draws_text:
-    check_draws = parse_multi_draws_for_checking(check_draws_text, max_draws=5)
-    if check_draws:
-        st.success(f"✅ 成功解析 {len(check_draws)} 期数据")
-        
-        if st.session_state.get('generated_bets'):
+# ========== Tab 切换 ==========
+tab_ai, tab_custom = st.tabs(["🤖 AI推荐组合", "✏️ 自定义组合"])
+
+# ==================== Tab 1: AI推荐组合（原逻辑保留） ====================
+with tab_ai:
+    st.caption("📌 使用当前智能投注生成的组合进行查奖")
+    
+    if st.button("🔍 查奖（AI组合）", key="check_btn_ai"):
+        check_draws = parse_multi_draws_for_checking(check_draws_text, max_draws=5)
+        if not check_draws:
+            st.error("解析失败，请检查格式")
+        elif not st.session_state.get('generated_bets'):
+            st.warning("请先生成投注组合")
+        else:
+            st.success(f"✅ 成功解析 {len(check_draws)} 期数据")
+            
+            # ===== 原 AI 查奖逻辑（完全保留） =====
             enhanced_bets_data = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
                 numbers_display = ','.join(f"{n:02d}" for n in bet['numbers'])
                 row = {'组别': i, f'{len(bet["numbers"])}个号码': numbers_display, '和值': bet['sum']}
                 
+                # 复用原有的计分函数（针对AI组合，前6为正码，第7为特码）
                 match_scores = calculate_match_score_for_draws(bet['numbers'], check_draws)
                 for idx, draw in enumerate(check_draws):
                     period_str = str(draw['period'])
@@ -4555,11 +4600,89 @@ if st.button("🔍 查奖", key="check_btn") and check_draws_text:
             ])
             st.markdown("**📊 开奖数据预览**")
             st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+# ==================== Tab 2: 自定义组合（全新功能） ====================
+with tab_custom:
+    st.caption("📝 每行输入一注复式号码（6-49个），用空格或逗号分隔")
+    
+    # 自定义号码输入框（高度约150px，约6-8行）
+    custom_bets_text = st.text_area(
+        "输入投注组合",
+        height=150,
+        key="custom_bets_input",
+        placeholder="例:\n1,5,12,23,30,42,47\n2 8 15 24 31 40 45\n3,9,16,25,32,41,46,7"
+    )
+    
+    if st.button("🔍 查奖（自定义组合）", key="check_btn_custom"):
+        # 1. 解析开奖数据
+        check_draws = parse_multi_draws_for_checking(check_draws_text, max_draws=5)
+        if not check_draws:
+            st.error("请先在顶部粘贴正确的开奖数据（至少1期）")
+        elif not custom_bets_text.strip():
+            st.warning("请至少输入一组投注号码")
         else:
-            st.warning("请先生成投注组合")
-    else:
-        st.error("解析失败，请检查格式")
-#---------------
+            # 2. 解析用户输入的每一注
+            custom_bets = parse_custom_bets(custom_bets_text)
+            
+            if not custom_bets:
+                st.error("没有有效的投注组合（请确保每行6-49个1-49的不重复数字）")
+            else:
+                st.success(f"✅ 成功解析 {len(custom_bets)} 组有效投注，比对 {len(check_draws)} 期数据")
+                
+                # 3. 构建结果表格
+                result_data = []
+                for idx, bet_nums in enumerate(custom_bets, 1):
+                    # 投注号码列：完整显示所有号码
+                    numbers_display = ','.join(f"{n:02d}" for n in bet_nums)
+                    row = {
+                        "组别": idx,
+                        "投注号码": numbers_display
+                    }
+                    
+                    # 计算每一期的得分
+                    match_scores = calculate_custom_match_scores(bet_nums, check_draws)
+                    for j, draw in enumerate(check_draws):
+                        period_str = str(draw['period'])
+                        if len(period_str) > 10:
+                            period_str = period_str[-10:]
+                        row[f'中奖_{period_str}'] = match_scores[j]
+                    
+                    result_data.append(row)
+                
+                # 4. 展示结果（带横向滚动）
+                df_result = pd.DataFrame(result_data)
+                
+                # 设置列宽：投注号码列宽大，其余紧凑
+                column_config = {}
+                for col in df_result.columns:
+                    if col == "投注号码":
+                        column_config[col] = st.column_config.TextColumn(
+                            "投注号码",
+                            width="large",
+                            help="完整显示所有号码"
+                        )
+                    elif col == "组别":
+                        column_config[col] = st.column_config.NumberColumn("组别", width="small")
+                    else:
+                        column_config[col] = st.column_config.TextColumn(col, width="small")
+                
+                st.dataframe(
+                    df_result,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=column_config
+                )
+                
+                # 显示开奖数据预览
+                preview_df = pd.DataFrame([
+                    {'期次': d['period'], '正码': str(d['numbers']), '特码': d['special']}
+                    for d in check_draws
+                ])
+                st.markdown("**📊 开奖数据预览**")
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                
+                # 计分说明
+                st.caption("💡 得分 = 命中正码个数 + (命中特码 ? 0.5 : 0)")#---------------
 # ==================== 策略回测（5种方法对比） ====================
 st.markdown("---")
 st.subheader("📊 策略回测（5种方法对比）")
