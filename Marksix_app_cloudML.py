@@ -4513,9 +4513,9 @@ def parse_custom_bets(text: str) -> List[List[int]]:
     for line in lines:
         if not line.strip():
             continue
-        # 清洗分隔符（支持中文逗号、顿号、空格、英文逗号）
-        clean_line = line.replace('，', ',').replace('、', ',').replace(' ', ',')
-        parts = [p.strip() for p in clean_line.split(',') if p.strip()]
+        # 使用正则分割：支持空格、制表符、逗号、中文逗号、顿号等
+        parts = re.split(r'[,\s\t，、]+', line.strip())
+        parts = [p for p in parts if p]  # 过滤空字符串
         nums = []
         valid = True
         for p in parts:
