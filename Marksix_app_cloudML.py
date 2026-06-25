@@ -3908,69 +3908,64 @@ with col5:
     st.write("")  # 占位，让按钮垂直对齐
     #------------
     if st.button("🔄 检查更新", key="update_btn", help="从网站抓取最新开奖数据"):
-    with st.spinner("正在检查更新..."):
-        # 1. 获取当前数据库最新期次
-        current_draws = load_draws_from_supabase()
-        if current_draws:
-            # 按期次降序取第一个
-            sorted_draws = sorted(current_draws, key=lambda x: int(x.get('period', 0)), reverse=True)
-            latest_db_period = sorted_draws[0]['period']
-        else:
-            latest_db_period = 0
-
-        # 2. 抓取网页数据
-        new_data = fetch_latest_from_9800()
-        if not new_data:
-            st.warning("未获取到数据，请检查网络或稍后重试")
-        else:
-            # 3. 筛选出比数据库最新期次更大的数据
-            to_insert = [d for d in new_data if d['period'] > latest_db_period]
-            if not to_insert:
-                st.info(f"✅ 已是最新数据（最新期次: {latest_db_period}）")
+        with st.spinner("正在检查更新..."):
+            # 1. 获取当前数据库最新期次
+            current_draws = load_draws_from_supabase()
+            if current_draws:
+                sorted_draws = sorted(current_draws, key=lambda x: int(x.get('period', 0)), reverse=True)
+                latest_db_period = sorted_draws[0]['period']
             else:
-                # 4. 插入新数据（使用现有的增量同步或批量插入）
-                # 注意：to_insert 可能包含重复？但网页最近20期应该不会有重复期次
-                # 使用 upsert 或逐个插入
-                try:
-                    supabase = init_supabase()
-                    if supabase is None:
-                        st.error("Supabase 连接失败")
-                    else:
-                        # 批量插入（使用 upsert 避免重复）
-                        for rec in to_insert:
-                            # 构造与表结构匹配的记录
-                            record = {
-                                "period": rec['period'],
-                                "date": rec['date'],
-                                "numbers": rec['numbers'],
-                                "special": rec['special'],
-                                "sum_7": rec['sum'],
-                                "sum_value": rec['sum']
-                            }
-                            supabase.schema('marksix_schema').table('marksix_draws').upsert(
-                                record, on_conflict='period'
-                            ).execute()
-                        
-                        # 5. 检查总行数，若超过1000则删除最旧的数据
-                        total_count = supabase.schema('marksix_schema').table('marksix_draws').select("*", count="exact").execute()
-                        count = total_count.count if hasattr(total_count, 'count') else len(total_count.data)
-                        if count > 1000:
-                            # 获取最旧的 (count - 1000) 条的 period
-                            old_records = supabase.schema('marksix_schema').table('marksix_draws')\
-                                .select("period").order("period", desc=False).limit(count - 1000).execute()
-                            old_periods = [r['period'] for r in old_records.data]
-                            if old_periods:
-                                # 批量删除
-                                for p in old_periods:
-                                    supabase.schema('marksix_schema').table('marksix_draws')\
-                                        .delete().eq("period", p).execute()
-                        
-                        st.success(f"✅ 成功新增 {len(to_insert)} 期数据，已保留最新1000期")
-                        # 刷新页面数据
-                        st.session_state['draws_loaded'] = load_draws_from_supabase()
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"更新失败: {e}")
+                latest_db_period = 0
+    
+            # 2. 抓取网页数据
+            new_data = fetch_latest_from_9800()
+            if not new_data:
+                st.warning("未获取到数据，请检查网络或稍后重试")
+            else:
+                # 3. 筛选出比数据库最新期次更大的数据
+                to_insert = [d for d in new_data if d['period'] > latest_db_period]
+                if not to_insert:
+                    st.info(f"✅ 已是最新数据（最新期次: {latest_db_period}）")
+                else:
+                    # 4. 插入新数据
+                    try:
+                        supabase = init_supabase()
+                        if supabase is None:
+                            st.error("Supabase 连接失败")
+                        else:
+                            # 批量插入（使用 upsert 避免重复）
+                            for rec in to_insert:
+                                record = {
+                                    "period": rec['period'],
+                                    "date": rec['date'],
+                                    "numbers": rec['numbers'],
+                                    "special": rec['special'],
+                                    "sum_7": rec['sum'],
+                                    "sum_value": rec['sum']
+                                }
+                                supabase.schema('marksix_schema').table('marksix_draws').upsert(
+                                    record, on_conflict='period'
+                                ).execute()
+                            
+                            # 5. 检查总行数，若超过1000则删除最旧的数据
+                            total_count = supabase.schema('marksix_schema').table('marksix_draws').select("*", count="exact").execute()
+                            count = total_count.count if hasattr(total_count, 'count') else len(total_count.data)
+                            if count > 1000:
+                                # 获取最旧的 (count - 1000) 条的 period
+                                old_records = supabase.schema('marksix_schema').table('marksix_draws')\
+                                    .select("period").order("period", desc=False).limit(count - 1000).execute()
+                                old_periods = [r['period'] for r in old_records.data]
+                                if old_periods:
+                                    for p in old_periods:
+                                        supabase.schema('marksix_schema').table('marksix_draws')\
+                                            .delete().eq("period", p).execute()
+                            
+                            st.success(f"✅ 成功新增 {len(to_insert)} 期数据，已保留最新1000期")
+                            # 刷新页面数据
+                            st.session_state['draws_loaded'] = load_draws_from_supabase()
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"更新失败: {e}")
         
 st.markdown("---")
 # ===
