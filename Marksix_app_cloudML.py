@@ -1631,7 +1631,7 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
 def fetch_latest_from_9800() -> List[Dict]:
     """
     从 http://www.9800.com.tw/lotto6/statistics.html 抓取最近20期数据
-    增加详细调试信息，帮助定位问题
+    增强定位逻辑，显示表格片段辅助调试
     """
     url = "http://www.9800.com.tw/lotto6/statistics.html"
     headers = {
@@ -1645,7 +1645,6 @@ def fetch_latest_from_9800() -> List[Dict]:
         if resp.status_code != 200:
             st.warning(f"网页返回异常状态码: {resp.status_code}")
             return []
-        
         soup = BeautifulSoup(resp.text, 'html.parser')
         st.info("网页解析成功，正在定位表格...")
     except Exception as e:
@@ -1653,42 +1652,48 @@ def fetch_latest_from_9800() -> List[Dict]:
         st.error(f"网络请求或解析失败: {e}")
         return []
 
-    # 尝试多种方式定位表格（提高鲁棒性）
-    table = None
-    # 方式1：通过属性
-    table = soup.find('table', {'cellspacing': '1', 'cellpadding': '4'})
-    if not table:
-        st.warning("未找到属性匹配的表格，尝试通过 class 查找...")
-        table = soup.find('table', class_=lambda x: x and 'table' in x.lower())
-    if not table:
-        st.warning("未通过 class 找到，尝试查找所有表格...")
-        tables = soup.find_all('table')
-        # 通常第一个或第二个是数据表，选择包含“期次”的表格
-        for tbl in tables:
-            if '期次' in tbl.get_text():
-                table = tbl
+    # 遍历所有表格，找到包含“期次”和“開獎日期”的表格（且包含数字期次）
+    tables = soup.find_all('table')
+    target_table = None
+    for tbl in tables:
+        text = tbl.get_text()
+        if '期次' in text and '開獎日期' in text:
+            # 进一步检查是否包含数字（期次）
+            # 用简单方法：检查是否有包含纯数字的td
+            rows = tbl.find_all('tr')
+            for row in rows:
+                cells = row.find_all('td')
+                if len(cells) >= 1 and cells[0].get_text(strip=True).isdigit():
+                    target_table = tbl
+                    break
+            if target_table:
                 break
-    if not table:
-        st.error("无法定位数据表格，网页结构可能已变化")
+
+    if not target_table:
+        st.error("未找到包含期次和開獎日期的数据表格")
         return []
 
-    st.info("表格定位成功，开始解析行数据...")
-    rows = table.find_all('tr')
-    st.info(f"找到 {len(rows)} 行，正在提取有效数据...")
-    
+    st.info("找到目标表格，显示前500个字符供检查：")
+    st.code(str(target_table)[:500], language='html')
+
+    rows = target_table.find_all('tr')
+    st.info(f"找到 {len(rows)} 行，开始解析...")
+
     data = []
-    # 跳过表头（前2行通常是表头）
-    for idx, row in enumerate(rows[2:], start=1):
+    for idx, row in enumerate(rows):
         cells = row.find_all('td')
         if len(cells) < 9:
-            st.warning(f"第 {idx} 行只有 {len(cells)} 列，跳过")
+            continue
+        # 跳过表头（第一行有“期次”文本）
+        header_text = cells[0].get_text(strip=True)
+        if header_text == '期次':
             continue
         try:
             period_str = cells[0].get_text(strip=True)
             if not period_str.isdigit():
                 continue
             period = int(period_str)
-            date_str = cells[1].get_text(strip=True)  # 格式 2026-05-07
+            date_str = cells[1].get_text(strip=True)
             numbers = []
             for i in range(2, 8):
                 num = int(cells[i].get_text(strip=True))
@@ -1702,7 +1707,8 @@ def fetch_latest_from_9800() -> List[Dict]:
                 'sum': sum(numbers) + special
             })
         except (ValueError, IndexError) as e:
-            st.warning(f"第 {idx} 行解析失败: {e}")
+            # 打印错误行号方便调试
+            st.warning(f"第 {idx+1} 行解析失败: {e}")
             continue
 
     st.info(f"成功解析 {len(data)} 期数据")
