@@ -1631,35 +1631,28 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
 def fetch_latest_from_9800() -> List[Dict]:
     """
     从 http://www.9800.com.tw/lotto6/statistics.html 抓取最近20期数据
-    增强定位逻辑，显示表格片段辅助调试
     """
     url = "http://www.9800.com.tw/lotto6/statistics.html"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     try:
-        st.info("正在请求网页...")
         resp = requests.get(url, headers=headers, timeout=15)
         resp.encoding = 'utf-8'
-        st.info(f"网页响应状态码: {resp.status_code}")
         if resp.status_code != 200:
-            st.warning(f"网页返回异常状态码: {resp.status_code}")
+            st.error(f"网页返回异常状态码: {resp.status_code}")
             return []
         soup = BeautifulSoup(resp.text, 'html.parser')
-        st.info("网页解析成功，正在定位表格...")
     except Exception as e:
-        st.exception(e)
-        st.error(f"网络请求或解析失败: {e}")
+        st.error(f"网络请求失败: {e}")
         return []
 
-    # 遍历所有表格，找到包含“期次”和“開獎日期”的表格（且包含数字期次）
+    # 定位包含数据的主表格
     tables = soup.find_all('table')
     target_table = None
     for tbl in tables:
         text = tbl.get_text()
         if '期次' in text and '開獎日期' in text:
-            # 进一步检查是否包含数字（期次）
-            # 用简单方法：检查是否有包含纯数字的td
             rows = tbl.find_all('tr')
             for row in rows:
                 cells = row.find_all('td')
@@ -1670,21 +1663,16 @@ def fetch_latest_from_9800() -> List[Dict]:
                 break
 
     if not target_table:
-        st.error("未找到包含期次和開獎日期的数据表格")
+        st.error("未找到数据表格，网页结构可能已变化")
         return []
 
-    st.info("找到目标表格，显示前500个字符供检查：")
-    st.code(str(target_table)[:500], language='html')
-
     rows = target_table.find_all('tr')
-    st.info(f"找到 {len(rows)} 行，开始解析...")
-
     data = []
     for idx, row in enumerate(rows):
         cells = row.find_all('td')
         if len(cells) < 9:
             continue
-        # 跳过表头（第一行有“期次”文本）
+        # 跳过表头
         header_text = cells[0].get_text(strip=True)
         if header_text == '期次':
             continue
@@ -1706,12 +1694,9 @@ def fetch_latest_from_9800() -> List[Dict]:
                 'special': special,
                 'sum': sum(numbers) + special
             })
-        except (ValueError, IndexError) as e:
-            # 打印错误行号方便调试
-            st.warning(f"第 {idx+1} 行解析失败: {e}")
+        except (ValueError, IndexError):
             continue
 
-    st.info(f"成功解析 {len(data)} 期数据")
     return data
 #------------------
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
