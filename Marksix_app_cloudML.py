@@ -4535,10 +4535,10 @@ def parse_custom_bets(text: str) -> List[List[int]]:
             bets.append(nums)
     return bets
 
-# ========== 辅助函数：计算自定义组合的匹配分数（通用版） ==========
-def calculate_custom_match_scores(bet_numbers: List[int], check_draws: List[Dict]) -> List[str]:
+# ========== 辅助函数：计算匹配分数（通用版，适用于任何号码集合） ==========
+def calculate_match_score_for_draws(bet_numbers: List[int], check_draws: List[Dict]) -> List[str]:
     """
-    计算自定义投注在每期开奖中的匹配分数
+    计算投注在每期开奖中的匹配分数
     规则：命中正码个数 + (命中特码 ? 0.5 : 0)
     """
     results = []
@@ -4559,6 +4559,9 @@ def calculate_custom_match_scores(bet_numbers: List[int], check_draws: List[Dict
             results.append(f"{score:.1f}")
     return results
 
+# 为了与旧代码兼容，保留原名（实际上已统一）
+# calculate_match_score_for_draws 已经定义，不需要别名
+
 # ========== Tab 切换 ==========
 tab_ai, tab_custom = st.tabs(["🤖 AI推荐组合", "✏️ 自定义组合"])
 
@@ -4575,13 +4578,13 @@ with tab_ai:
         else:
             st.success(f"✅ 成功解析 {len(check_draws)} 期数据")
             
-            # ===== 原 AI 查奖逻辑（完全保留） =====
+            # ===== 原 AI 查奖逻辑（完全保留，计分函数已统一） =====
             enhanced_bets_data = []
             for i, bet in enumerate(st.session_state['generated_bets'], 1):
                 numbers_display = ','.join(f"{n:02d}" for n in bet['numbers'])
                 row = {'组别': i, f'{len(bet["numbers"])}个号码': numbers_display, '和值': bet['sum']}
                 
-                # 复用原有的计分函数（针对AI组合，前6为正码，第7为特码）
+                # 调用统一的计分函数
                 match_scores = calculate_match_score_for_draws(bet['numbers'], check_draws)
                 for idx, draw in enumerate(check_draws):
                     period_str = str(draw['period'])
@@ -4639,8 +4642,8 @@ with tab_custom:
                         "投注号码": numbers_display
                     }
                     
-                    # 计算每一期的得分
-                    match_scores = calculate_custom_match_scores(bet_nums, check_draws)
+                    # 计算每一期的得分（复用同一函数）
+                    match_scores = calculate_match_score_for_draws(bet_nums, check_draws)
                     for j, draw in enumerate(check_draws):
                         period_str = str(draw['period'])
                         if len(period_str) > 10:
@@ -4682,7 +4685,7 @@ with tab_custom:
                 st.dataframe(preview_df, use_container_width=True, hide_index=True)
                 
                 # 计分说明
-                st.caption("💡 得分 = 命中正码个数 + (命中特码 ? 0.5 : 0)")#---------------
+                st.caption("💡 得分 = 命中正码个数 + (命中特码 ? 0.5 : 0)")
 # ==================== 策略回测（5种方法对比） ====================
 st.markdown("---")
 st.subheader("📊 策略回测（5种方法对比）")
