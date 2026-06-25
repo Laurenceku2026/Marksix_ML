@@ -2680,13 +2680,29 @@ def train_lightgbm_model(draws: List[Dict], lookback: int = 100) -> Optional[Any
         return None
     
     try:
-        model = lgb.LGBMClassifier(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=42,
-            verbose=-1
-        )
+        #-----
+        if lookback <= 20:
+            # 极简模式：深度只有2，叶子只有4个，强L2正则化
+            model = lgb.LGBMClassifier(
+                n_estimators=30,          # 树极少，防止过拟合
+                max_depth=2,              # 深度2，只能捕捉最简单的线性/交互
+                num_leaves=4,             # 叶子数极少
+                reg_lambda=100,           # 极强L2正则化（惩罚大权重）
+                reg_alpha=10,             # 极强L1正则化（特征选择）
+                learning_rate=0.05,       # 降低学习率
+                random_state=42,
+                verbose=-1,
+                min_child_samples=3       # 叶子最少3个样本
+            )
+        else:
+            # 原来的正常模式（大于20期时使用）
+            model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=42,
+                verbose=-1
+            )
         model.fit(X, y)
         return model
     except Exception as e:
@@ -2937,16 +2953,33 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100) -> Optiona
         return None
     
     try:
-        # 优化参数：减少树数量、深度、迭代次数
-        xgb_model = xgb.XGBClassifier(
-            n_estimators=80,      # 从150降到80
-            max_depth=4,          # 从6降到4
-            learning_rate=0.1,
-            random_state=42,
-            use_label_encoder=False,
-            eval_metric='logloss',
-            verbosity=0
-        )
+        # ========== 策略 A：极简特征 + 极端正则化 ==========
+        if lookback <= 20:
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=30,          # 树极少
+                max_depth=2,              # 深度只有2
+                learning_rate=0.05,
+                reg_lambda=100,           # 极强L2
+                reg_alpha=10,             # 极强L1
+                gamma=5,                  # 分裂所需的最小损失减少（越大越保守）
+                min_child_weight=3,       # 叶子最小权重
+                random_state=42,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                verbosity=0
+            )
+        else:
+            # 原来的正常模式（大于20期时使用）
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=80,
+                max_depth=4,
+                learning_rate=0.1,
+                random_state=42,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                verbosity=0
+            )
+        # ===================================================
         
         nn_model = MLPClassifier(
             hidden_layer_sizes=(32, 16),  # 从3层减少到2层
@@ -4354,9 +4387,9 @@ with st.expander("⚙️ 高级设置"):
     with col1:
         method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="m1_window")
     with col2:
-        method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="m3_window")
+        method3_window = st.number_input("方法3 LightGBM期数", min_value=10, max_value=300, value=20, step=5, key="m3_window")
     with col3:
-        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="m4_window")
+        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=10, max_value=300, value=20, step=5, key="m4_window")
 
 # 显示和值预测信息
 # 根据用户选择的预测方法获取和值范围
@@ -4582,9 +4615,9 @@ else:
         with col_1:
             method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="bt_method1_window")
         with col_3:
-            method3_window = st.number_input("方法3 LightGBM期数", min_value=50, max_value=300, value=100, step=10, key="bt_method3_window")
+            method3_window = st.number_input("方法3 LightGBM期数", min_value=10, max_value=300, value=20, step=5, key="bt_method3_window")
         with col_4:
-            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=50, max_value=300, value=100, step=10, key="bt_method4_window")
+            method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=10, max_value=300, value=20, step=5, key="bt_method4_window")
         
         # 第三行：回测期数设置
         st.markdown("**📈 回测期数设置**")
