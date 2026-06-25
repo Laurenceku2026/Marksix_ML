@@ -3906,6 +3906,10 @@ st.subheader("📊 数据概览")
 sorted_draws = sorted(draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
 latest_draw = sorted_draws[-1] if sorted_draws else {}
 oldest_draw = sorted_draws[0] if sorted_draws else {}
+#--------
+# 创建一个占位符，用于显示更新结果（整行宽度）
+update_placeholder = st.empty()
+
 #------------
 col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
 
@@ -3921,9 +3925,10 @@ with col3:
 with col4:
     st.metric("数据总量", f"{len(draws)} 期")
 with col5:
-    # 按钮代码...
     st.write("")
     if st.button("🔄 检查更新", key="update_btn", help="从网站抓取最新开奖数据"):
+        # 清空旧的占位符消息
+        update_placeholder.empty()
         with st.spinner("正在检查更新..."):
             # 1. 获取当前数据库最新期次
             current_draws = load_draws_from_supabase()
@@ -3932,22 +3937,22 @@ with col5:
                 latest_db_period = sorted_draws[0]['period']
             else:
                 latest_db_period = 0
-    
+
             # 2. 抓取网页数据
             new_data = fetch_latest_from_9800()
             if not new_data:
-                st.warning("未获取到数据，请检查网络或稍后重试")
+                update_placeholder.warning("未获取到数据，请检查网络或稍后重试")
             else:
                 # 3. 筛选出比数据库最新期次更大的数据
                 to_insert = [d for d in new_data if d['period'] > latest_db_period]
                 if not to_insert:
-                    st.info(f"✅ 已是最新数据（最新期次: {latest_db_period}）")
+                    update_placeholder.info(f"✅ 已是最新数据（最新期次: {latest_db_period}）")
                 else:
                     # 4. 插入新数据
                     try:
                         supabase = init_supabase()
                         if supabase is None:
-                            st.error("Supabase 连接失败")
+                            update_placeholder.error("Supabase 连接失败")
                         else:
                             # 批量插入（使用 upsert 避免重复）
                             for rec in to_insert:
@@ -3976,12 +3981,12 @@ with col5:
                                         supabase.schema('marksix_schema').table('marksix_draws')\
                                             .delete().eq("period", p).execute()
                             
-                            st.success(f"✅ 成功新增 {len(to_insert)} 期数据，已保留最新1000期")
+                            update_placeholder.success(f"✅ 成功新增 {len(to_insert)} 期数据，已保留最新1000期")
                             # 刷新页面数据
                             st.session_state['draws_loaded'] = load_draws_from_supabase()
                             st.rerun()
                     except Exception as e:
-                        st.error(f"更新失败: {e}")
+                        update_placeholder.error(f"更新失败: {e}")
         
 st.markdown("---")
 # ===
