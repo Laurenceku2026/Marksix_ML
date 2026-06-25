@@ -26,6 +26,8 @@ from math import comb
 import plotly.express as px
 import plotly.graph_objects as go
 from supabase import create_client, Client
+import requests
+from bs4 import BeautifulSoup
 
 # 尝试导入机器学习库
 try:
@@ -1625,8 +1627,65 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
             except (ValueError, IndexError):
                 continue
     return draws
+#---------------
+def fetch_latest_from_9800() -> List[Dict]:
+    """
+    从 http://www.9800.com.tw/lotto6/statistics.html 抓取最近20期数据
+    返回: List[Dict]，每个字典包含 period(int), date(str), numbers(List[int]), special(int)
+    """
+    url = "http://www.9800.com.tw/lotto6/statistics.html"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.encoding = 'utf-8'
+        soup = BeautifulSoup(resp.text, 'html.parser')
+    except Exception as e:
+        st.error(f"网络请求失败: {e}")
+        return []
 
+    # 定位表格（页面中只有一个包含期次、日期、球号的大表格）
+    table = soup.find('table', {'cellspacing': '1', 'cellpadding': '4'})
+    if not table:
+        st.error("未找到数据表格，网页结构可能已变化")
+        return []
 
+    rows = table.find_all('tr')
+    data = []
+    # 跳过表头（前两行是表头）
+    for row in rows[2:]:
+        cells = row.find_all('td')
+        if len(cells) < 9:
+            continue
+        try:
+            period_str = cells[0].get_text(strip=True)
+            if not period_str.isdigit():
+                continue
+            period = int(period_str)  # 转为整数，去掉前导零
+
+            date_str = cells[1].get_text(strip=True)  # 格式 2026-05-07
+
+            # 正码 (第3~8列, index 2~7)
+            numbers = []
+            for i in range(2, 8):
+                num = int(cells[i].get_text(strip=True))
+                numbers.append(num)
+            # 特码 (第9列, index 8)
+            special = int(cells[8].get_text(strip=True))
+
+            data.append({
+                'period': period,
+                'date': date_str,
+                'numbers': sorted(numbers),
+                'special': special,
+                'sum': sum(numbers) + special  # 7码和值
+            })
+        except (ValueError, IndexError):
+            continue
+
+    return data
+#------------------
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
     """
     解析Excel文件 - 完整修复版
@@ -3834,18 +3893,85 @@ st.subheader("📊 数据概览")
 sorted_draws = sorted(draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
 latest_draw = sorted_draws[-1] if sorted_draws else {}
 oldest_draw = sorted_draws[0] if sorted_draws else {}
-
-col1, col2, col3, col4 = st.columns(4)
+#------------
+col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
 with col1:
-    st.metric("最新期次", latest_draw.get('period', 'N/A'))
+    st.metric("最新期次", latest_period)
 with col2:
-    latest_date = latest_draw.get('date', 'N/A')
-    st.metric("最新日期", latest_date[:10] if latest_date and len(latest_date) > 10 else latest_date)
+    st.metric("最新日期", latest_date)
 with col3:
-    st.metric("最早期次", oldest_draw.get('period', 'N/A'))
+    st.metric("最早期次", oldest_period)
 with col4:
     st.metric("数据总量", f"{len(draws)} 期")
 
+with col5:
+    st.write("")  # 占位，让按钮垂直对齐
+    #------------
+    if st.button("🔄 检查更新", key="update_btn", help="从网站抓取最新开奖数据"):
+    with st.spinner("正在检查更新..."):
+        # 1. 获取当前数据库最新期次
+        current_draws = load_draws_from_supabase()
+        if current_draws:
+            # 按期次降序取第一个
+            sorted_draws = sorted(current_draws, key=lambda x: int(x.get('period', 0)), reverse=True)
+            latest_db_period = sorted_draws[0]['period']
+        else:
+            latest_db_period = 0
+
+        # 2. 抓取网页数据
+        new_data = fetch_latest_from_9800()
+        if not new_data:
+            st.warning("未获取到数据，请检查网络或稍后重试")
+        else:
+            # 3. 筛选出比数据库最新期次更大的数据
+            to_insert = [d for d in new_data if d['period'] > latest_db_period]
+            if not to_insert:
+                st.info(f"✅ 已是最新数据（最新期次: {latest_db_period}）")
+            else:
+                # 4. 插入新数据（使用现有的增量同步或批量插入）
+                # 注意：to_insert 可能包含重复？但网页最近20期应该不会有重复期次
+                # 使用 upsert 或逐个插入
+                try:
+                    supabase = init_supabase()
+                    if supabase is None:
+                        st.error("Supabase 连接失败")
+                    else:
+                        # 批量插入（使用 upsert 避免重复）
+                        for rec in to_insert:
+                            # 构造与表结构匹配的记录
+                            record = {
+                                "period": rec['period'],
+                                "date": rec['date'],
+                                "numbers": rec['numbers'],
+                                "special": rec['special'],
+                                "sum_7": rec['sum'],
+                                "sum_value": rec['sum']
+                            }
+                            supabase.schema('marksix_schema').table('marksix_draws').upsert(
+                                record, on_conflict='period'
+                            ).execute()
+                        
+                        # 5. 检查总行数，若超过1000则删除最旧的数据
+                        total_count = supabase.schema('marksix_schema').table('marksix_draws').select("*", count="exact").execute()
+                        count = total_count.count if hasattr(total_count, 'count') else len(total_count.data)
+                        if count > 1000:
+                            # 获取最旧的 (count - 1000) 条的 period
+                            old_records = supabase.schema('marksix_schema').table('marksix_draws')\
+                                .select("period").order("period", desc=False).limit(count - 1000).execute()
+                            old_periods = [r['period'] for r in old_records.data]
+                            if old_periods:
+                                # 批量删除
+                                for p in old_periods:
+                                    supabase.schema('marksix_schema').table('marksix_draws')\
+                                        .delete().eq("period", p).execute()
+                        
+                        st.success(f"✅ 成功新增 {len(to_insert)} 期数据，已保留最新1000期")
+                        # 刷新页面数据
+                        st.session_state['draws_loaded'] = load_draws_from_supabase()
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"更新失败: {e}")
+        
 st.markdown("---")
 # ===
 # ==================== 冷热码分析 & 方法A详情 ====================
