@@ -3895,18 +3895,21 @@ latest_draw = sorted_draws[-1] if sorted_draws else {}
 oldest_draw = sorted_draws[0] if sorted_draws else {}
 #------------
 col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
+
 with col1:
-    st.metric("最新期次", latest_period)
+    st.metric("最新期次", latest_draw.get('period', 'N/A'))
 with col2:
+    latest_date = latest_draw.get('date', 'N/A')
+    if latest_date and len(latest_date) > 10:
+        latest_date = latest_date[:10]
     st.metric("最新日期", latest_date)
 with col3:
-    st.metric("最早期次", oldest_period)
+    st.metric("最早期次", oldest_draw.get('period', 'N/A'))
 with col4:
     st.metric("数据总量", f"{len(draws)} 期")
-
 with col5:
-    st.write("")  # 占位，让按钮垂直对齐
-    #------------
+    # 按钮代码...
+    st.write("")
     if st.button("🔄 检查更新", key="update_btn", help="从网站抓取最新开奖数据"):
         with st.spinner("正在检查更新..."):
             # 1. 获取当前数据库最新期次
