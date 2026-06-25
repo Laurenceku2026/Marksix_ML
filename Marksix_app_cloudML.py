@@ -2669,8 +2669,8 @@ def prepare_lightgbm_dataset(draws: List[Dict], lookback: int = 100) -> Tuple[Op
     
     return X_df, y_series
 
-
-def train_lightgbm_model(draws: List[Dict], lookback: int = 100) -> Optional[Any]:
+#-------------
+def train_lightgbm_model(draws: List[Dict], lookback: int = 100, random_seed: int = 7) -> Optional[Any]:
     """训练LightGBM模型"""
     if not LGB_AVAILABLE:
         return None
@@ -2690,7 +2690,7 @@ def train_lightgbm_model(draws: List[Dict], lookback: int = 100) -> Optional[Any
                 reg_lambda=100,           # 极强L2正则化（惩罚大权重）
                 reg_alpha=10,             # 极强L1正则化（特征选择）
                 learning_rate=0.05,       # 降低学习率
-                random_state=42,
+                random_state=random_seed,
                 verbose=-1,
                 min_child_samples=3       # 叶子最少3个样本
             )
@@ -2700,7 +2700,7 @@ def train_lightgbm_model(draws: List[Dict], lookback: int = 100) -> Optional[Any
                 n_estimators=100,
                 max_depth=5,
                 learning_rate=0.1,
-                random_state=42,
+                random_state=random_seed,
                 verbose=-1
             )
         model.fit(X, y)
@@ -2943,7 +2943,7 @@ def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Op
     return X_df, y_series
 
 #--------------------
-def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100) -> Optional[Dict]:
+def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_seed: int = 7) -> Optional[Dict]:
     """训练XGBoost + 神经网络集成（优化版）"""
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return None
@@ -2963,7 +2963,7 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100) -> Optiona
                 reg_alpha=10,             # 极强L1
                 gamma=5,                  # 分裂所需的最小损失减少（越大越保守）
                 min_child_weight=3,       # 叶子最小权重
-                random_state=42,
+                random_state=random_seed,
                 use_label_encoder=False,
                 eval_metric='logloss',
                 verbosity=0
@@ -2974,7 +2974,7 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100) -> Optiona
                 n_estimators=80,
                 max_depth=4,
                 learning_rate=0.1,
-                random_state=42,
+                random_state=random_seed,
                 use_label_encoder=False,
                 eval_metric='logloss',
                 verbosity=0
