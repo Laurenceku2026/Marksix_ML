@@ -1631,59 +1631,81 @@ def parse_multi_draws_for_checking(text: str, max_draws: int = 5) -> List[Dict]:
 def fetch_latest_from_9800() -> List[Dict]:
     """
     从 http://www.9800.com.tw/lotto6/statistics.html 抓取最近20期数据
-    返回: List[Dict]，每个字典包含 period(int), date(str), numbers(List[int]), special(int)
+    增加详细调试信息，帮助定位问题
     """
     url = "http://www.9800.com.tw/lotto6/statistics.html"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        st.info("正在请求网页...")
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.encoding = 'utf-8'
+        st.info(f"网页响应状态码: {resp.status_code}")
+        if resp.status_code != 200:
+            st.warning(f"网页返回异常状态码: {resp.status_code}")
+            return []
+        
         soup = BeautifulSoup(resp.text, 'html.parser')
+        st.info("网页解析成功，正在定位表格...")
     except Exception as e:
-        st.error(f"网络请求失败: {e}")
+        st.exception(e)
+        st.error(f"网络请求或解析失败: {e}")
         return []
 
-    # 定位表格（页面中只有一个包含期次、日期、球号的大表格）
+    # 尝试多种方式定位表格（提高鲁棒性）
+    table = None
+    # 方式1：通过属性
     table = soup.find('table', {'cellspacing': '1', 'cellpadding': '4'})
     if not table:
-        st.error("未找到数据表格，网页结构可能已变化")
+        st.warning("未找到属性匹配的表格，尝试通过 class 查找...")
+        table = soup.find('table', class_=lambda x: x and 'table' in x.lower())
+    if not table:
+        st.warning("未通过 class 找到，尝试查找所有表格...")
+        tables = soup.find_all('table')
+        # 通常第一个或第二个是数据表，选择包含“期次”的表格
+        for tbl in tables:
+            if '期次' in tbl.get_text():
+                table = tbl
+                break
+    if not table:
+        st.error("无法定位数据表格，网页结构可能已变化")
         return []
 
+    st.info("表格定位成功，开始解析行数据...")
     rows = table.find_all('tr')
+    st.info(f"找到 {len(rows)} 行，正在提取有效数据...")
+    
     data = []
-    # 跳过表头（前两行是表头）
-    for row in rows[2:]:
+    # 跳过表头（前2行通常是表头）
+    for idx, row in enumerate(rows[2:], start=1):
         cells = row.find_all('td')
         if len(cells) < 9:
+            st.warning(f"第 {idx} 行只有 {len(cells)} 列，跳过")
             continue
         try:
             period_str = cells[0].get_text(strip=True)
             if not period_str.isdigit():
                 continue
-            period = int(period_str)  # 转为整数，去掉前导零
-
+            period = int(period_str)
             date_str = cells[1].get_text(strip=True)  # 格式 2026-05-07
-
-            # 正码 (第3~8列, index 2~7)
             numbers = []
             for i in range(2, 8):
                 num = int(cells[i].get_text(strip=True))
                 numbers.append(num)
-            # 特码 (第9列, index 8)
             special = int(cells[8].get_text(strip=True))
-
             data.append({
                 'period': period,
                 'date': date_str,
                 'numbers': sorted(numbers),
                 'special': special,
-                'sum': sum(numbers) + special  # 7码和值
+                'sum': sum(numbers) + special
             })
-        except (ValueError, IndexError):
+        except (ValueError, IndexError) as e:
+            st.warning(f"第 {idx} 行解析失败: {e}")
             continue
 
+    st.info(f"成功解析 {len(data)} 期数据")
     return data
 #------------------
 def parse_excel_file(uploaded_file) -> Optional[List[Dict]]:
