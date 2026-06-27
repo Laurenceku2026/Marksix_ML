@@ -4310,7 +4310,7 @@ with col4:
 sum_predict_method = st.radio(
     "选择预测方法（用于选号）",
     options=["动态回归", "均值回归", "移动平均(7期)", "正弦拟合"],
-    index=0,  # 默认动态回归
+    index=2,  # 默认动态回归
     key="sum_predict_method",
     horizontal=True
 )
