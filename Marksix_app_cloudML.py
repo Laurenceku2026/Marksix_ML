@@ -3168,7 +3168,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
             nums = sorted(nums[:num_count])
             total = sum(nums)
             
-            if abs(total - target_sum) <= 17:
+            if abs(total - target_sum) <= 25:
                 selected_numbers = nums
                 break
         
