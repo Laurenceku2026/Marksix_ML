@@ -2913,7 +2913,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
 # ==================== 方法4：XGBoost + 神经网络集成 ====================
 def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict]:
     """构建高级特征（包含更多规律特征）"""
-    if len(draws) < 30:
+    if len(draws) < 15:
         return None
     
     features = {}
@@ -2987,11 +2987,16 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
     
     return features
 
-
+#-----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """准备高级数据集"""
-    if len(draws) < lookback + 10:
+    # 放宽检查，与 build_advanced_features 保持一致
+    if len(draws) < 15:
         return None, None
+    # 后续循环中，i 从 lookback 开始，如果 lookback > len(draws)，会直接返回空
+    if lookback >= len(draws):
+        return None, None
+    # ...
     
     X_list = []
     y_list = []
@@ -4523,15 +4528,19 @@ with st.expander("⚙️ 高级设置"):
         elif seed_mode == "用户输入固定种子":
             fixed_seed_value = st.number_input("输入固定种子值", min_value=0, max_value=1000000, value=7, step=1, key="fixed_seed_value")
         # 机器自动产生：不需要额外输入
-    
+    #----------------
     st.markdown("**📊 训练期数设置**")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        method1_window = st.number_input("方法1/2期数", min_value=20, max_value=200, value=20, step=5, key="m1_window")
+        method_b_window = st.number_input("方法B期数", min_value=10, max_value=300, value=20, step=5, key="m_b_window")
     with col2:
-        method3_window = st.number_input("方法3 LightGBM期数", min_value=10, max_value=300, value=20, step=5, key="m3_window")
+        method_a_window = st.number_input("方法A期数", min_value=10, max_value=300, value=20, step=5, key="m_a_window")
     with col3:
-        method4_window = st.number_input("方法4/5 XGBoost+NN期数", min_value=10, max_value=300, value=20, step=5, key="m4_window")
+        method1_window = st.number_input("方法1/2期数", min_value=10, max_value=300, value=20, step=5, key="m1_window")
+    with col4:
+        method3_window = st.number_input("方法3期数", min_value=10, max_value=300, value=20, step=5, key="m3_window")
+    with col5:
+        method4_window = st.number_input("方法4/5期数", min_value=10, max_value=300, value=20, step=5, key="m4_window")
 
 # 显示和值预测信息
 # 根据用户选择的预测方法获取和值范围
@@ -4568,46 +4577,72 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         st.info("🔧 使用机器自动产生的随机种子（每期不同）")
     
     with st.spinner(f"正在使用 {ai_model} 生成投注..."):
+        # ========== 读取智能投注独立的训练窗口值 ==========
+        # 这些值在高级设置中已通过 st.number_input 定义
+        # method_b_window, method_a_window, method1_window, method3_window, method4_window
+        # ================================================
+        
         if "方法A" in ai_model:
+            # 方法A使用 method_a_window 截断数据
+            limited_draws = draws[-method_a_window:] if len(draws) > method_a_window else draws
             bets = generate_method_a_bets_wrapper(
-                draws, num_bets, num_count, random_seed, sum_predict_method
+                limited_draws, num_bets, num_count, random_seed, sum_predict_method
             )
             model_used = "方法A: 分池评分法"
+            
         elif "方法B" in ai_model:
+            # 方法B使用 method_b_window 截断数据
+            limited_draws = draws[-method_b_window:] if len(draws) > method_b_window else draws
             bets = generate_bets_method_b(
-                draws, num_bets, num_count, sum_predict_method, random_seed
+                limited_draws, num_bets, num_count, sum_predict_method, random_seed
             )
             model_used = "方法B: 新胆拖混合（基于方法A评分）"
+            
         elif "方法1" in ai_model:
+            # 方法1使用 method1_window 截断数据
+            limited_draws = draws[-method1_window:] if len(draws) > method1_window else draws
             bets = generate_bets_method1_current(
-                draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
+                limited_draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
             )
             model_used = "方法1: 当前方法"
+            
         elif "方法2" in ai_model:
+            # 方法2使用 method1_window 截断数据（与方法1共用）
+            limited_draws = draws[-method1_window:] if len(draws) > method1_window else draws
             bets = generate_bets_method2_hybrid(
-                draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
+                limited_draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
             )
             model_used = "方法2: 胆拖混合"
+            
         elif "方法3" in ai_model:
+            # 方法3使用 method3_window 截断数据
+            limited_draws = draws[-method3_window:] if len(draws) > method3_window else draws
             bets = generate_bets_method3_lightgbm(
-                draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method
+                limited_draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method
             )
             model_used = "方法3: LightGBM"
+            
         elif "方法4" in ai_model:
+            # 方法4使用 method4_window 截断数据
+            # 截断后的数据传入 XGBoost，配合 build_advanced_features 中 30→15 的修改，可正常训练
+            limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
             bets = generate_bets_method4_ensemble(
-                draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
+                limited_draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
             )
             model_used = "方法4: XGBoost+NN"
+            
         else:
+            # 方法5：综合模式，传入所有窗口值
+            limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
             bets = generate_bets_method5_ensemble(
-                draws, num_bets, num_count, trend_window, random_seed,
+                limited_draws, num_bets, num_count, trend_window, random_seed,
                 method1_window, method1_window, method3_window, method4_window
             )
             model_used = "方法5: 综合模式"
     
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
-    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")    
+    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
     st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
