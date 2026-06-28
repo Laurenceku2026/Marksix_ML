@@ -2714,17 +2714,21 @@ def build_features_for_lightgbm(draws: List[Dict], target_num: int) -> Optional[
     
     return features
 
-
+#------------
 def prepare_lightgbm_dataset(draws: List[Dict], lookback: int = 100) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """准备LightGBM训练数据集"""
-    if len(draws) < lookback + 10:
+    if len(draws) < max(5, lookback):
         return None, None
     
     X_list = []
     y_list = []
     
-    for i in range(lookback, len(draws) - 1):
-        train_draws = draws[i-lookback:i]
+    start_idx = max(0, len(draws) - lookback)
+    
+    for i in range(start_idx, len(draws) - 1):
+        train_draws = draws[i-lookback:i] if i >= lookback else draws[:i]
+        if len(train_draws) < 5:
+            continue
         next_draw = draws[i]
         
         for num in range(1, 50):
@@ -2748,7 +2752,7 @@ def train_lightgbm_model(draws: List[Dict], lookback: int = 100, random_seed: in
         return None
     
     X, y = prepare_lightgbm_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 100:
+    if X is None or len(X) < 10:
         return None
     
     try:
@@ -2991,18 +2995,20 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 #----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """准备高级数据集"""
-    # 放宽检查，与 build_advanced_features 保持一致
-    if len(draws) < 15:
-        return None, None
-    # 后续循环中，i 从 lookback 开始，如果 lookback > len(draws)，会直接返回空
-    if lookback >= len(draws):
+    # 放宽条件：至少需要5期，且 lookback 不能超过数据长度
+    if len(draws) < max(5, lookback):
         return None, None
     
     X_list = []
     y_list = []
     
-    for i in range(lookback, len(draws) - 1):
-        train_draws = draws[i-lookback:i]
+    # 如果 lookback 接近 len(draws)，只需有1次滑动即可
+    start_idx = max(0, len(draws) - lookback)
+    
+    for i in range(start_idx, len(draws) - 1):
+        train_draws = draws[i-lookback:i] if i >= lookback else draws[:i]
+        if len(train_draws) < 5:  # 至少5期才能提取特征
+            continue
         next_draw = draws[i]
         
         for num in range(1, 50):
