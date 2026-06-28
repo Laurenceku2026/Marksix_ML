@@ -4527,7 +4527,7 @@ with st.expander("⚙️ 高级设置"):
     st.markdown("**📊 训练期数设置**")
     col1, col2, col3 = st.columns(3)
     with col1:
-        method1_window = st.number_input("方法1/2期数", min_value=30, max_value=200, value=100, step=10, key="m1_window")
+        method1_window = st.number_input("方法1/2期数", min_value=20, max_value=200, value=20, step=5, key="m1_window")
     with col2:
         method3_window = st.number_input("方法3 LightGBM期数", min_value=10, max_value=300, value=20, step=5, key="m3_window")
     with col3:
