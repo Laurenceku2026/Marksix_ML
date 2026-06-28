@@ -2717,19 +2717,16 @@ def build_features_for_lightgbm(draws: List[Dict], target_num: int) -> Optional[
 #------------
 def prepare_lightgbm_dataset(draws: List[Dict], lookback: int = 100) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """准备LightGBM训练数据集"""
-    if len(draws) < max(5, lookback):
+    # 至少需要 lookback + 1 期数据才能有一次滑动
+    if len(draws) < lookback + 1:
         return None, None
     
     X_list = []
     y_list = []
     
-    start_idx = max(0, len(draws) - lookback)
-    
-    for i in range(start_idx, len(draws) - 1):
-        train_draws = draws[i-lookback:i] if i >= lookback else draws[:i]
-        if len(train_draws) < 5:
-            continue
-        next_draw = draws[i]
+    for i in range(lookback, len(draws)):
+        train_draws = draws[i-lookback:i]  # 前 lookback 期
+        next_draw = draws[i]               # 要预测的当期
         
         for num in range(1, 50):
             features = build_features_for_lightgbm(train_draws, num)
@@ -2995,20 +2992,14 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 #----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
     """准备高级数据集"""
-    # 放宽条件：至少需要5期，且 lookback 不能超过数据长度
-    if len(draws) < max(5, lookback):
+    if len(draws) < lookback + 1:
         return None, None
     
     X_list = []
     y_list = []
     
-    # 如果 lookback 接近 len(draws)，只需有1次滑动即可
-    start_idx = max(0, len(draws) - lookback)
-    
-    for i in range(start_idx, len(draws) - 1):
-        train_draws = draws[i-lookback:i] if i >= lookback else draws[:i]
-        if len(train_draws) < 5:  # 至少5期才能提取特征
-            continue
+    for i in range(lookback, len(draws)):
+        train_draws = draws[i-lookback:i]
         next_draw = draws[i]
         
         for num in range(1, 50):
@@ -3782,7 +3773,10 @@ def generate_bets_method_b(draws: List[Dict], num_bets: int, num_count: int = 7,
     hot_scores = [(num, all_scores[num]) for num in hot_pool]
     hot_scores.sort(key=lambda x: x[1], reverse=True)
     top10_hot = [num for num, _ in hot_scores[:10]]
-    
+    if len(top10_hot) < 3:
+        # 如果热池不足3个，从全部号码中随机选3个作为胆码
+        top10_hot = random.sample(range(1, 50), 3)
+                               
     # 剩余热池（排除Top10）
     remaining_hot_pool = [num for num in hot_pool if num not in top10_hot]
     
@@ -4645,7 +4639,9 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
                 method1_window, method1_window, method3_window, method4_window
             )
             model_used = "方法5: 综合模式"
-    
+    if not bets:
+        st.error(f"{model_used} 生成失败，请检查数据或调整参数")
+        st.stop()
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
     st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
