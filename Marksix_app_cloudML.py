@@ -2749,7 +2749,7 @@ def train_lightgbm_model(draws: List[Dict], lookback: int = 100, random_seed: in
         return None
     
     X, y = prepare_lightgbm_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 10:
+    if X is None or len(X) < 5:
         return None
     
     try:
@@ -3023,7 +3023,7 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_see
         return None
     
     X, y = prepare_advanced_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 100:
+    if X is None or len(X) < 10:
         return None
     
     try:
@@ -4583,7 +4583,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         # ================================================
         
         if "方法A" in ai_model:
-            # 方法A使用 method_a_window 截断数据
+            # 非ML方法：截取 method_a_window 期
             limited_draws = draws[-method_a_window:] if len(draws) > method_a_window else draws
             bets = generate_method_a_bets_wrapper(
                 limited_draws, num_bets, num_count, random_seed, sum_predict_method
@@ -4591,7 +4591,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             model_used = "方法A: 分池评分法"
             
         elif "方法B" in ai_model:
-            # 方法B使用 method_b_window 截断数据
             limited_draws = draws[-method_b_window:] if len(draws) > method_b_window else draws
             bets = generate_bets_method_b(
                 limited_draws, num_bets, num_count, sum_predict_method, random_seed
@@ -4599,7 +4598,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             model_used = "方法B: 新胆拖混合（基于方法A评分）"
             
         elif "方法1" in ai_model:
-            # 方法1使用 method1_window 截断数据
             limited_draws = draws[-method1_window:] if len(draws) > method1_window else draws
             bets = generate_bets_method1_current(
                 limited_draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
@@ -4607,7 +4605,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             model_used = "方法1: 当前方法"
             
         elif "方法2" in ai_model:
-            # 方法2使用 method1_window 截断数据（与方法1共用）
             limited_draws = draws[-method1_window:] if len(draws) > method1_window else draws
             bets = generate_bets_method2_hybrid(
                 limited_draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method
@@ -4615,36 +4612,44 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             model_used = "方法2: 胆拖混合"
             
         elif "方法3" in ai_model:
-            # 方法3使用 method3_window 截断数据
-            limited_draws = draws[-method3_window:] if len(draws) > method3_window else draws
+            # ML方法（LightGBM）需要 window+1 期数据（用前 window 期预测最后一期）
+            if len(draws) > method3_window:
+                limited_draws = draws[-(method3_window + 1):]
+            else:
+                limited_draws = draws
             bets = generate_bets_method3_lightgbm(
                 limited_draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method
             )
             model_used = "方法3: LightGBM"
             
         elif "方法4" in ai_model:
-            # 方法4使用 method4_window 截断数据
-            # 截断后的数据传入 XGBoost，配合 build_advanced_features 中 30→15 的修改，可正常训练
-            limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
+            # ML方法（XGBoost）需要 window+1 期数据
+            if len(draws) > method4_window:
+                limited_draws = draws[-(method4_window + 1):]
+            else:
+                limited_draws = draws
             bets = generate_bets_method4_ensemble(
                 limited_draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
             )
             model_used = "方法4: XGBoost+NN"
             
-        else:
-            # 方法5：综合模式，传入所有窗口值
-            limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
+        else:  # 方法5
+            # 综合模式内部会调用方法1~4，也需要 window+1 期数据
+            if len(draws) > method4_window:
+                limited_draws = draws[-(method4_window + 1):]
+            else:
+                limited_draws = draws
             bets = generate_bets_method5_ensemble(
                 limited_draws, num_bets, num_count, trend_window, random_seed,
                 method1_window, method1_window, method3_window, method4_window
             )
             model_used = "方法5: 综合模式"
+    
+    # 检查生成是否成功
     if not bets:
         st.error(f"{model_used} 生成失败，请检查数据或调整参数")
         st.stop()
-    st.session_state['generated_bets'] = bets
-    st.session_state['model_used'] = model_used
-    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
+    
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
     st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
