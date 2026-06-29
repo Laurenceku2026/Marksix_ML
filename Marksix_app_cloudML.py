@@ -2990,10 +2990,8 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 
 #------------------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    # 放宽条件：至少需要 lookback+1 期才能构造一次滑动窗口
-    if len(draws) < lookback + 1:
+    if len(draws) < lookback + 10:
         return None, None
-    # ... 其余代码不变
     
     X_list = []
     y_list = []
@@ -3022,7 +3020,7 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_see
         return None
     
     X, y = prepare_advanced_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 5:   # 从 100 改为 5，允许小样本训练
+    if X is None or len(X) < 100:   # 从 100 改为 5，允许小样本训练
         return None
     # ... 其余代码不变
     
