@@ -2913,8 +2913,9 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
 # ==================== 方法4：XGBoost + 神经网络集成 ====================
 def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict]:
     """构建高级特征（包含更多规律特征）"""
-    if len(draws) < 30:
+    if len(draws) < 15:   # 从 30 改为 15，支持 20 期训练
         return None
+    # ... 其余代码不变
     
     features = {}
     total_draws = len(draws)
@@ -2987,11 +2988,12 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
     
     return features
 
-
+#------------------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    """准备高级数据集"""
-    if len(draws) < lookback + 10:
+    # 放宽条件：至少需要 lookback+1 期才能构造一次滑动窗口
+    if len(draws) < lookback + 1:
         return None, None
+    # ... 其余代码不变
     
     X_list = []
     y_list = []
@@ -3016,13 +3018,13 @@ def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Op
 
 #--------------------
 def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_seed: int = 7) -> Optional[Dict]:
-    """训练XGBoost + 神经网络集成（优化版）"""
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return None
     
     X, y = prepare_advanced_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 100:
+    if X is None or len(X) < 5:   # 从 100 改为 5，允许小样本训练
         return None
+    # ... 其余代码不变
     
     try:
         # ========== 策略 A：极简特征 + 极端正则化 ==========
