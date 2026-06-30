@@ -2918,7 +2918,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
 # ==================== 方法4：XGBoost + 神经网络集成 ====================
 def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict]:
     """构建高级特征（包含更多规律特征）"""
-    if len(draws) < 30:
+    if len(draws) < 15:
         return None
     
     features = {}
