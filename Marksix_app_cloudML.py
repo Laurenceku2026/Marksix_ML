@@ -4576,6 +4576,11 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         random_seed = None
         st.info("🔧 使用机器自动产生的随机种子（每期不同）")
 
+    # ========== 强制从数据库加载最新数据，确保与回测一致 ==========
+    draws = load_draws_from_supabase()
+    st.session_state['draws_loaded'] = draws
+    # ============================================================
+
     # ---------- 根据选择的方法应用种子偏移（与回测一致） ----------
     offset_map = {
         "方法1": 100,
@@ -4586,7 +4591,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         "方法A": 0,
         "方法B": 0
     }
-    # 从 ai_model 中提取方法名（例如 "方法4: XGBoost+NN" -> "方法4"）
     method_key = ai_model.split(":")[0] if ":" in ai_model else ai_model
     if method_key in offset_map:
         if random_seed is not None:
@@ -4633,7 +4637,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             model_used = "方法3: LightGBM"
 
         elif "方法4" in ai_model:
-            # 方法4：使用全量数据（与回测一致）
             bets = generate_bets_method4_ensemble(
                 draws, num_bets, num_count, trend_window, adjusted_seed, method4_window, sum_predict_method
             )
@@ -4650,9 +4653,6 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         st.error(f"{model_used} 生成失败，请检查数据或参数")
         st.stop()
 
-    st.session_state['generated_bets'] = bets
-    st.session_state['model_used'] = model_used
-    st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
     st.session_state['generated_bets'] = bets
     st.session_state['model_used'] = model_used
     st.success(f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式")
