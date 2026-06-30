@@ -3032,7 +3032,7 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_see
         return None
     
     X, y = prepare_advanced_dataset(draws, lookback=lookback)
-    if X is None or len(X) < 100:
+    if X is None or len(X) < 5:
         return None
     
     try:
