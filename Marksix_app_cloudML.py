@@ -2918,7 +2918,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
 # ==================== 方法4：XGBoost + 神经网络集成 ====================
 def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict]:
     """构建高级特征（包含更多规律特征）"""
-    if len(draws) < 30:
+    if len(draws) < 20:
         return None
     
     features = {}
@@ -4637,7 +4637,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             # 截断后的数据传入 XGBoost，配合 build_advanced_features 中 30→15 的修改，可正常训练
             limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
             bets = generate_bets_method4_ensemble(
-                limited_draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
+                draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method
             )
             model_used = "方法4: XGBoost+NN"
             
@@ -4645,7 +4645,7 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
             # 方法5：综合模式，传入所有窗口值
             limited_draws = draws[-method4_window:] if len(draws) > method4_window else draws
             bets = generate_bets_method5_ensemble(
-                limited_draws, num_bets, num_count, trend_window, random_seed,
+                draws, num_bets, num_count, trend_window, random_seed,
                 method1_window, method1_window, method3_window, method4_window
             )
             model_used = "方法5: 综合模式"
