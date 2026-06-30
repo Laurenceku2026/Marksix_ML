@@ -2994,7 +2994,7 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 
 #-----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    if len(draws) < lookback + 1:
+    if len(draws) < lookback + 10:
         return None, None
     
     X_list = []
