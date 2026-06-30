@@ -2994,38 +2994,28 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 
 #-----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    st.write(f"🔍 [DEBUG] prepare_advanced_dataset 收到 draws 长度: {len(draws)}")
-    st.write(f"🔍 [DEBUG] lookback: {lookback}")
-    
     if len(draws) < lookback + 10:
-        st.write(f"❌ [DEBUG] 数据不足: {len(draws)} < {lookback + 10}，返回 None")
         return None, None
     
     X_list = []
     y_list = []
     
-    st.write(f"🔍 [DEBUG] 开始循环: range({lookback}, {len(draws)} - 1)")
     for i in range(lookback, len(draws) - 1):
         train_draws = draws[i-lookback:i]
         # 每50期打印一次进度，避免刷屏
         if i % 50 == 0:
-            st.write(f"🔍 [DEBUG] 处理窗口 {i}, train_draws 长度: {len(train_draws)}")
         for num in range(1, 50):
             features = build_advanced_features(train_draws, num)
             if features:
                 X_list.append(features)
                 y_list.append(1 if num in draws[i]['numbers'] else 0)
     
-    st.write(f"🔍 [DEBUG] 共生成 X_list 样本数: {len(X_list)}")
-    
     if not X_list:
-        st.write(f"❌ [DEBUG] X_list 为空，返回 None")
         return None, None
     
     X_df = pd.DataFrame(X_list).fillna(0)
     y_series = pd.Series(y_list)
     
-    st.write(f"✅ [DEBUG] 成功生成 {len(X_df)} 个训练样本")
     return X_df, y_series
 
 #--------------------
@@ -3551,7 +3541,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     
     # 缓存投注结果（每10期重新训练一次）
     trained_models = {}
-    retrain_interval = 10
+    retrain_interval = 1
     
     # 计算每组成本（半注）
     from math import comb
