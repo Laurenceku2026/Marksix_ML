@@ -2994,35 +2994,38 @@ def build_advanced_features(draws: List[Dict], target_num: int) -> Optional[Dict
 
 #-----------
 def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    """准备高级数据集"""
-    # 放宽条件：至少需要5期，且 lookback 不能超过数据长度
+    st.write(f"🔍 [DEBUG] prepare_advanced_dataset 收到 draws 长度: {len(draws)}")
+    st.write(f"🔍 [DEBUG] lookback: {lookback}")
+    
     if len(draws) < lookback + 10:
+        st.write(f"❌ [DEBUG] 数据不足: {len(draws)} < {lookback + 10}，返回 None")
         return None, None
     
     X_list = []
     y_list = []
     
-    # 如果 lookback 接近 len(draws)，只需有1次滑动即可
-    start_idx = max(0, len(draws) - lookback)
-    
-    for i in range(start_idx, len(draws) - 1):
-        train_draws = draws[i-lookback:i] if i >= lookback else draws[:i]
-        if len(train_draws) < 5:  # 至少5期才能提取特征
-            continue
-        next_draw = draws[i]
-        
+    st.write(f"🔍 [DEBUG] 开始循环: range({lookback}, {len(draws)} - 1)")
+    for i in range(lookback, len(draws) - 1):
+        train_draws = draws[i-lookback:i]
+        # 每50期打印一次进度，避免刷屏
+        if i % 50 == 0:
+            st.write(f"🔍 [DEBUG] 处理窗口 {i}, train_draws 长度: {len(train_draws)}")
         for num in range(1, 50):
             features = build_advanced_features(train_draws, num)
             if features:
                 X_list.append(features)
-                y_list.append(1 if num in next_draw['numbers'] else 0)
+                y_list.append(1 if num in draws[i]['numbers'] else 0)
+    
+    st.write(f"🔍 [DEBUG] 共生成 X_list 样本数: {len(X_list)}")
     
     if not X_list:
+        st.write(f"❌ [DEBUG] X_list 为空，返回 None")
         return None, None
     
     X_df = pd.DataFrame(X_list).fillna(0)
     y_series = pd.Series(y_list)
     
+    st.write(f"✅ [DEBUG] 成功生成 {len(X_df)} 个训练样本")
     return X_df, y_series
 
 #--------------------
