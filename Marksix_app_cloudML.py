@@ -3003,7 +3003,7 @@ def prepare_advanced_dataset(draws: List[Dict], lookback: int = 200) -> Tuple[Op
     for i in range(lookback, len(draws) - 1):
         train_draws = draws[i-lookback:i]
         # 每50期打印一次进度，避免刷屏
-        if i % 50 == 0:
+    if i % 50 == 0:
         for num in range(1, 50):
             features = build_advanced_features(train_draws, num)
             if features:
