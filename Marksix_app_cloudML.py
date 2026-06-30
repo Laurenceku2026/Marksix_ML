@@ -3130,6 +3130,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
     """
     方法4：XGBoost + 神经网络集成 - 添加和值筛选（500次 + 降级策略）
     """
+print(f"generate_bets_method4_ensemble received draws length: {len(draws)}")                                         
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
         return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
