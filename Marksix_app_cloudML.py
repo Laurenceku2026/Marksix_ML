@@ -2393,30 +2393,10 @@ def dispatch_generate_bets(
             train_draws, num_bets, num_count, trend_window, seed_val, train_window, sum_predict_method
         )
 
-    bets1 = generate_bets_method1_current(train_draws, num_bets, num_count, trend_window, seed_val, m1, sum_predict_method)
-    bets2 = generate_bets_method2_hybrid(train_draws, num_bets, num_count, trend_window, seed_val, m1, sum_predict_method)
-    bets3 = generate_bets_method3_lightgbm(train_draws, num_bets, num_count, trend_window, seed_val, m3, sum_predict_method)
-    bets4 = generate_bets_method4_ensemble(train_draws, num_bets, num_count, trend_window, seed_val, m4, sum_predict_method)
-    all_numbers = []
-    for bet in bets1 + bets2 + bets3 + bets4:
-        all_numbers.extend(bet['numbers'])
-    freq_counter = Counter(all_numbers)
-    top_numbers = [num for num, _ in freq_counter.most_common(num_count)]
-    bets = []
-    random.seed(seed_val)
-    np.random.seed(seed_val)
-    for j in range(num_bets):
-        nums = top_numbers.copy()
-        if j > 0:
-            replace_count = min(j, 2)
-            for _ in range(replace_count):
-                idx2 = random.randint(0, len(nums) - 1)
-                candidates = [n for n in range(1, 50) if n not in nums]
-                if candidates:
-                    nums[idx2] = random.choice(candidates)
-            nums = sorted(nums)
-        bets.append({'numbers': nums, 'sum': sum(nums)})
-    return bets
+    return generate_bets_method5_ensemble(
+        train_draws, num_bets, num_count, trend_window, seed_val,
+        m1, m1, m3, m4, sum_predict_method
+    )
 
 
 def build_method_a_kwargs_from_session() -> Dict:
@@ -3557,7 +3537,8 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
 def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: int,
                                      trend_window: int, random_seed: Optional[int],
                                      method1_window: int = 50, method2_window: int = 50,
-                                     method3_window: int = 100, method4_window: int = 200) -> List[Dict]:
+                                     method3_window: int = 100, method4_window: int = 200,
+                                     sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
     """
     方法5：综合模式（运行方法1-4，取高频号码 + 规律加权）- 添加和值筛选
     """
@@ -3571,22 +3552,22 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     all_numbers = []
     
     # 方法1
-    bets1 = generate_bets_method1_current(draws, num_bets, num_count, trend_window, random_seed, method1_window, "移动平均(7期)")
+    bets1 = generate_bets_method1_current(draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method)
     for bet in bets1:
         all_numbers.extend(bet['numbers'])
     
     # 方法2
-    bets2 = generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, method2_window, "移动平均(7期)")
+    bets2 = generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, method2_window, sum_predict_method)
     for bet in bets2:
         all_numbers.extend(bet['numbers'])
     
     # 方法3
-    bets3 = generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, method3_window, "移动平均(7期)")
+    bets3 = generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method)
     for bet in bets3:
         all_numbers.extend(bet['numbers'])
     
     # 方法4
-    bets4 = generate_bets_method4_ensemble(draws, num_bets, num_count, trend_window, random_seed, method4_window, "移动平均(7期)")
+    bets4 = generate_bets_method4_ensemble(draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method)
     for bet in bets4:
         all_numbers.extend(bet['numbers'])
     
@@ -3614,7 +3595,7 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     bets = []
     for i in range(num_bets):
         # 每注独立生成和值目标
-        target_sum = get_sum_target_by_method(draws, num_count, trend_window, "移动平均(7期)")
+        target_sum = get_sum_target_by_method(draws, num_count, trend_window, sum_predict_method)
         
         selected_numbers = None
         
@@ -4973,8 +4954,8 @@ if st.session_state['generated_bets'] is not None:
             '组别': i,
             f'{num_count_display}个号码': numbers_display,
             '和值': bet['sum'],
-            '策略': bet['target'],
-            '偏差': f"{bet['deviation']:+d}"
+            '策略': bet.get('target', model_used),
+            '偏差': f"{bet.get('deviation', 0):+d}"
         })
     
     st.dataframe(pd.DataFrame(bets_data), use_container_width=True, hide_index=True)
