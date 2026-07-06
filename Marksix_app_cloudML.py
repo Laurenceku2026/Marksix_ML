@@ -2911,6 +2911,47 @@ def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -
     }
 
 
+def use_new_machine_training_flag() -> bool:
+    """是否仅使用新机器期次训练（自动模式恒为 True）"""
+    if st.session_state.get('auto_train_params_mode', True):
+        return True
+    return st.session_state.get('use_new_machine_only', False)
+
+
+def resolve_train_config_for_prediction(training_draws: List[Dict]) -> Dict[str, Any]:
+    """
+    根据实际用于训练的数据计算参数。
+    回测每一期与智能投注必须调用此函数（而非全量库期数），才能保证结果可对齐。
+    """
+    return resolve_train_config(training_draws, exclude_latest=False)
+
+
+def build_prediction_context(
+    all_draws: List[Dict],
+    method_key: str,
+    exclude_latest: bool = False,
+) -> Dict[str, Any]:
+    """回测与智能投注共用的训练集 + 参数解析（相同输入必须产出相同投注）"""
+    use_nm = use_new_machine_training_flag()
+    training_draws = get_training_draws(all_draws, exclude_latest=exclude_latest, new_machine_only=use_nm)
+    cfg = resolve_train_config_for_prediction(training_draws)
+    train_window = get_method_train_window(
+        method_key,
+        cfg['method_a_window'],
+        cfg['method_b_window'],
+        cfg['method1_window'],
+        cfg['method3_window'],
+        cfg['method4_window'],
+    )
+    return {
+        'training_draws': training_draws,
+        'cfg': cfg,
+        'train_window': train_window,
+        'trend_window': cfg['trend_window'],
+        'use_new_machine_only': use_nm,
+    }
+
+
 def resolve_train_config(draws: List[Dict], exclude_latest: bool = False) -> Dict[str, Any]:
     """解析当前生效的训练参数（自动/手动统一出口，回测与智能投注必须调用此函数）"""
     if st.session_state.get('auto_train_params_mode', True):
@@ -3836,7 +3877,12 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     3. 成本计算：每组成本 = C(num_count, 6) × 5（半注）
     4. 修复缓存key包含num_count，避免不同号码数的缓存冲突
     """
-    if len(draws) < train_window + test_periods:
+    if test_periods < 1 or len(draws) <= test_periods:
+        return None
+    first_train = draws[:-test_periods]
+    first_cfg = resolve_train_config_for_prediction(first_train)
+    min_needed = first_cfg.get('min_backtest_draws', 17) + test_periods
+    if len(draws) < min_needed:
         return None
     
     total_cost = 0
@@ -3851,6 +3897,16 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
+        period_cfg = resolve_train_config_for_prediction(train_draws)
+        period_train_window = get_method_train_window(
+            method_key,
+            period_cfg['method_a_window'],
+            period_cfg['method_b_window'],
+            period_cfg['method1_window'],
+            period_cfg['method3_window'],
+            period_cfg['method4_window'],
+        )
+        period_trend_window = period_cfg['trend_window']
         
         seed_val = compute_prediction_seed(
             method_key, seed_mode,
@@ -3861,10 +3917,10 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         
         bets = dispatch_generate_bets(
             method_key, train_draws, num_bets, num_count,
-            trend_window, seed_val, train_window, sum_predict_method,
-            method1_window=train_window,
-            method3_window=train_window,
-            method4_window=train_window,
+            period_trend_window, seed_val, period_train_window, sum_predict_method,
+            method1_window=period_cfg['method1_window'],
+            method3_window=period_cfg['method3_window'],
+            method4_window=period_cfg['method4_window'],
         )
         
         # 计算最佳匹配的奖金和匹配分数
@@ -4756,7 +4812,12 @@ with st.expander("⚙️ 高级设置"):
         help=f"自动使用 {NEW_MACHINE_START_PERIOD} 期及以后的新机器数据，并随数据累积调整训练窗口"
     )
     
-    _preview_cfg = resolve_train_config(draws, exclude_latest=False)
+    _preview_ctx = build_prediction_context(
+        draws,
+        parse_method_key(ai_model),
+        exclude_latest=st.session_state.get('backtest_align_mode', False),
+    )
+    _preview_cfg = _preview_ctx['cfg']
     st.caption(format_train_config_summary(_preview_cfg))
     
     col1, col2 = st.columns(2)
@@ -4844,14 +4905,32 @@ with st.expander("⚙️ 高级设置"):
             )
     
     backtest_align_mode = st.checkbox(
-        "🔁 回测对齐模式（排除最新一期数据，用于验证回测最后一期）",
+        "🔁 回测对齐模式（排除最新一期，用于验证回测「最后一期」）",
         value=False,
         key="backtest_align_mode",
-        help="开启后训练数据与「回测期数=1、测试最新一期」相同；预测下一期时请关闭"
+        help="验证回测最后一期时开启；复现中间某期时请关闭，并删除该期及之后数据"
     )
+    with st.expander("📋 如何复现回测某一期的投注号码", expanded=False):
+        st.markdown("""
+**复现中间某期（例：回测 26069，当前库有到 26072）**
+1. 在管理员页删除 **26069 及之后** 所有期次，重新加载数据（最新剩 26068）
+2. 智能投注选 **相同方法、组数、码数、种子模式与种子值**
+3. **关闭**「回测对齐模式」→ 生成投注
+4. 结果应与回测表格中 26069 那一行 **100% 一致**
 
-# 统一训练配置（回测与智能投注必须同源）
-_pred_cfg = resolve_train_config(draws, exclude_latest=st.session_state.get('backtest_align_mode', False))
+**复现最后一期（例：回测 26072）**
+- 保留全量数据，**开启**「回测对齐模式」，或删除 26072 后关闭对齐模式
+
+> 参数（ML 窗口等）按**实际训练期数**自动计算，与回测每期逻辑相同。
+        """)
+
+# 统一训练配置预览（基于实际训练集，与回测每期逻辑一致）
+_pred_ctx = build_prediction_context(
+    draws,
+    parse_method_key(ai_model),
+    exclude_latest=st.session_state.get('backtest_align_mode', False),
+)
+_pred_cfg = _pred_ctx['cfg']
 # 根据用户选择的预测方法获取和值范围
 if sum_predict_method == "均值回归":
     sum_lower, sum_upper = get_target_sum_mean_reversion_range(draws)
@@ -4867,17 +4946,12 @@ st.caption(f"💡 **和值预测 ({sum_method_name})**: 范围 {sum_lower}-{sum_
 #------------------
 if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
     method_key = parse_method_key(ai_model)
-    cfg = resolve_train_config(draws, exclude_latest=st.session_state.get('backtest_align_mode', False))
-    train_window = get_method_train_window(
-        method_key, cfg['method_a_window'], cfg['method_b_window'],
-        cfg['method1_window'], cfg['method3_window'], cfg['method4_window']
-    )
-    trend_window = cfg['trend_window']
-    training_draws = get_training_draws(
-        draws,
-        exclude_latest=st.session_state.get('backtest_align_mode', False),
-        new_machine_only=cfg['use_new_machine_only'],
-    )
+    align = st.session_state.get('backtest_align_mode', False)
+    pred_ctx = build_prediction_context(draws, method_key, exclude_latest=align)
+    cfg = pred_ctx['cfg']
+    training_draws = pred_ctx['training_draws']
+    train_window = pred_ctx['train_window']
+    trend_window = pred_ctx['trend_window']
     
     seed_datetime = None
     draw_date_for_seed = None
@@ -4935,7 +5009,9 @@ if st.button("🚀 生成智能投注", type="primary", key="generate_btn"):
         st.session_state['last_train_config'] = cfg
         st.success(
             f"✅ 使用 {model_used} 生成 {len(bets)} 组{num_count}码复式"
-            f"（种子={random_seed}，训练={len(training_draws)}期，ML窗={cfg['ml_lookback']}）"
+            f"（种子={random_seed}，训练={len(training_draws)}期至"
+            f"{training_draws[-1].get('period') if training_draws else '?'}，"
+            f"ML窗={cfg['ml_lookback']}）"
         )
 
 # 显示生成的投注
@@ -5173,7 +5249,10 @@ else:
     total_draws_count = len(backtest_draws)
     bt_cfg = resolve_train_config(backtest_draws, exclude_latest=False)
     st.info(f"📊 回测数据 {total_draws_count} 期 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
-    st.caption(format_train_config_summary(bt_cfg) + " · 与智能投注共用同一套参数")
+    st.caption(
+        format_train_config_summary(bt_cfg)
+        + " · 回测每期按**当期训练集**重算 ML 窗口（与智能投注删数据复现逻辑一致）"
+    )
     
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
@@ -5281,7 +5360,7 @@ else:
                           hot_count=6, cold_count=1, hot_range=(0, 10),
                           hot_temperature=0.8, cold_temperature=0.8, zone_window=15):
         """方法A回测函数"""
-        if len(draws) < train_window + test_periods:
+        if len(draws) < test_periods + 8:
             return None
         
         total_cost = 0
@@ -5305,6 +5384,8 @@ else:
             train_draws = draws[:-(test_periods - i)]
             test_draw = draws[-(test_periods - i)]
             test_period = test_draw.get('period', '')
+            period_cfg = resolve_train_config_for_prediction(train_draws)
+            period_trend_window = period_cfg['trend_window']
             
             seed_val = compute_prediction_seed(
                 "方法A", seed_mode,
@@ -5315,7 +5396,7 @@ else:
             
             bets = dispatch_generate_bets(
                 "方法A", train_draws, num_bets, num_count,
-                trend_window, seed_val, train_window, sum_predict_method,
+                period_trend_window, seed_val, period_cfg['method_a_window'], sum_predict_method,
                 method_a_kwargs=method_a_kwargs,
             )
             
@@ -5388,7 +5469,7 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
     """
     方法B回测函数（新胆拖混合，基于方法A评分）
     """
-    if len(draws) < train_window + test_periods:
+    if len(draws) < test_periods + 8:
         return None
     
     total_cost = 0
@@ -5403,6 +5484,8 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
+        period_cfg = resolve_train_config_for_prediction(train_draws)
+        period_trend_window = period_cfg['trend_window']
         
         seed_val = compute_prediction_seed(
             "方法B", seed_mode,
@@ -5413,7 +5496,7 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
         
         bets = dispatch_generate_bets(
             "方法B", train_draws, num_bets, num_count,
-            trend_window, seed_val, train_window, sum_predict_method,
+            period_trend_window, seed_val, period_cfg['method_b_window'], sum_predict_method,
         )
         
         best_prize = 0
@@ -5596,14 +5679,9 @@ if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_
                 )
                 if st.button("🔍 生成单期投注（应与智能投注对齐模式一致）", key="verify_single_period"):
                     v_key = parse_method_key(verify_method)
-                    v_cfg = resolve_train_config(backtest_draws, exclude_latest=True)
-                    v_train_window = get_method_train_window(
-                        v_key, v_cfg['method_a_window'], v_cfg['method_b_window'],
-                        v_cfg['method1_window'], v_cfg['method3_window'], v_cfg['method4_window']
-                    )
-                    train_draws = get_training_draws(
-                        backtest_draws, exclude_latest=True, new_machine_only=v_cfg['use_new_machine_only']
-                    )
+                    v_ctx = build_prediction_context(backtest_draws, v_key, exclude_latest=True)
+                    v_cfg = v_ctx['cfg']
+                    train_draws = v_ctx['training_draws']
                     test_draw = backtest_draws[-1]
                     v_seed = compute_prediction_seed(
                         v_key, seed_mode,
@@ -5613,7 +5691,7 @@ if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_
                     v_kwargs = build_method_a_kwargs_from_session() if v_key == "方法A" else None
                     verify_bets = dispatch_generate_bets(
                         v_key, train_draws, test_bets, test_num_count,
-                        v_cfg['trend_window'], v_seed, v_train_window, sum_predict_method,
+                        v_ctx['trend_window'], v_seed, v_ctx['train_window'], sum_predict_method,
                         method_a_kwargs=v_kwargs,
                         method1_window=v_cfg['method1_window'],
                         method3_window=v_cfg['method3_window'],
@@ -5621,7 +5699,8 @@ if st.button("▶️ 运行5种方法回测", type="primary", key="run_backtest_
                     )
                     st.caption(
                         f"验证期次 {test_draw.get('period')} | 种子 {v_seed} | "
-                        f"训练 {len(train_draws)} 期 | 请在智能投注开启「回测对齐模式」后对比"
+                        f"训练 {len(train_draws)} 期至 {train_draws[-1].get('period') if train_draws else '?'} | "
+                        f"ML窗 {v_cfg['ml_lookback']} | 请在智能投注开启「回测对齐模式」后对比"
                     )
                     verify_rows = []
                     for i, bet in enumerate(verify_bets, 1):
