@@ -2787,10 +2787,9 @@ def generate_bets_method2_hybrid(draws: List[Dict], num_bets: int, num_count: in
 
 
 # ==================== 方法3：LightGBM ====================
-NEW_MACHINE_START_PERIOD = 26046  # 2026-05-02 后换新机器
-# 新机器期数未达该值时：自动模式用「扩展历史」提升 ML/规则样本；达标后再切到仅新机器
-AUTO_NEW_MACHINE_ONLY_MIN = 80
-EXTENDED_HISTORY_CAP = 150  # 扩展历史最多取最近 N 期（含旧机器）
+NEW_MACHINE_START_PERIOD = 26047  # 新机器起始期（用户确认）
+# 自动模式固定「仅新机器」：旧机器+新机器混训会拉大窗口，实测反而更差
+EXTENDED_HISTORY_CAP = 150  # 仅手动/调试保留；自动模式不再使用
 
 
 def _period_to_int(period) -> int:
@@ -2801,7 +2800,7 @@ def _period_to_int(period) -> int:
 
 
 def filter_draws_for_machine(draws: List[Dict], new_machine_only: bool = False) -> List[Dict]:
-    """可选：仅保留新机器期次（26046期及以后）"""
+    """可选：仅保留新机器期次（26047期及以后）"""
     if not new_machine_only:
         return draws
     filtered = [d for d in draws if _period_to_int(d.get('period')) >= NEW_MACHINE_START_PERIOD]
@@ -2846,52 +2845,46 @@ def max_viable_ml_lookback(n: int) -> int:
 
 
 def optimal_ml_lookback(n: int) -> int:
-    """在可训练前提下，按数据量选取偏保守的 ML lookback（保留足够滑动窗）"""
+    """在可训练前提下，按新机器数据量选取偏保守的 ML lookback"""
     if n < 17:
         return max(8, n - 3)
     max_lb = max_viable_ml_lookback(n)
     if n < 35:
         target = max(10, int(n * 0.55))
     elif n < 80:
-        target = max(20, int(n * 0.45))
+        target = max(15, int(n * 0.40))
     elif n < 200:
-        target = max(40, int(n * 0.35))
+        target = max(30, int(n * 0.30))
     else:
         target = min(100, max(50, n // 4))
     return min(max_lb, target)
 
 
 def optimal_rule_window(n: int, ml_lookback: int) -> int:
-    """规则类方法（A/B/1/2）训练窗口"""
+    """规则类方法（A/B/1/2）训练窗口——贴合新机器样本，避免过大"""
     if n < 35:
-        return min(max(15, n - 5), max(ml_lookback, n - 2))
+        return min(max(10, n - 5), max(ml_lookback, n - 2))
     if n < 100:
-        return min(n - 5, max(ml_lookback, 40))
-    return min(100, max(ml_lookback, min(n - 10, 60)))
+        return min(n - 5, max(ml_lookback, 25))
+    return min(100, max(ml_lookback, min(n - 10, 50)))
 
 
 def select_auto_training_draws(
     draws: List[Dict], exclude_latest: bool = False
 ) -> Tuple[List[Dict], bool, str]:
     """
-    自动模式训练集选择。
-    - 新机器期数 < AUTO_NEW_MACHINE_ONLY_MIN：扩展历史（最近 EXTENDED_HISTORY_CAP 期，含旧机器）
-    - 否则：仅新机器
+    自动模式：始终仅用新机器期次（26047+）。
     返回 (training_draws, use_new_machine_only, data_source_label)
     """
     base = draws[:-1] if exclude_latest and len(draws) > 1 else list(draws)
-    nm_count = count_new_machine_draws(base)
-    if nm_count >= AUTO_NEW_MACHINE_ONLY_MIN:
-        training = filter_draws_for_machine(base, True)
-        return training, True, 'new_machine'
-    training = base[-EXTENDED_HISTORY_CAP:] if len(base) > EXTENDED_HISTORY_CAP else base
-    return training, False, 'extended_history'
+    training = filter_draws_for_machine(base, True)
+    return training, True, 'new_machine'
 
 
 def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -> Dict[str, Any]:
     """
     自动计算训练参数（回测与智能投注共用）。
-    新机器初期数据不足时用扩展历史，避免方法1-5/ML 在小样本下全面失效。
+    仅基于新机器数据，窗口随新机器累计期数增长。
     """
     training, use_nm, data_src = select_auto_training_draws(draws, exclude_latest=exclude_latest)
     new_machine_count = count_new_machine_draws(draws)
@@ -2900,9 +2893,7 @@ def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -
     rule_lb = optimal_rule_window(n, ml_lb)
     p_start, p_end = get_new_machine_period_range(draws)
 
-    if data_src == 'extended_history':
-        mode = 'extended'
-    elif n < 17:
+    if n < 17:
         mode = 'insufficient'
     elif n < 35:
         mode = 'minimal'
@@ -2931,26 +2922,20 @@ def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -
         'sliding_windows': sliding_windows,
         'period_start': p_start,
         'period_end': p_end,
-        'min_backtest_draws': max(ml_min_total_draws(ml_lb) + 1, 50 if not use_nm else 17),
+        'min_backtest_draws': max(ml_min_total_draws(ml_lb) + 1, 17),
         'auto': True,
     }
 
 
 def use_new_machine_training_flag(draws: Optional[List[Dict]] = None) -> bool:
-    """是否仅使用新机器期次训练（自动模式按数据量决定）"""
+    """是否仅使用新机器期次训练（自动模式恒为 True）"""
     if st.session_state.get('auto_train_params_mode', True):
-        if draws is None:
-            return False  # 由 compute_auto_train_params 决定，勿在缺数据时误切新机器
-        _, use_nm, _ = select_auto_training_draws(draws, exclude_latest=False)
-        return use_nm
+        return True
     return st.session_state.get('use_new_machine_only', False)
 
 
 def resolve_train_config_for_prediction(training_or_all_draws: List[Dict]) -> Dict[str, Any]:
-    """
-    解析训练参数。自动模式下请传入「未按新机器预过滤」的全集（可已去掉对齐期），
-    以便扩展历史逻辑能取到旧机器期次。
-    """
+    """解析训练参数（自动模式下会再按新机器规则筛选）。"""
     return resolve_train_config(training_or_all_draws, exclude_latest=False)
 
 
@@ -4888,10 +4873,7 @@ with st.expander("⚙️ 高级设置"):
         "🤖 自动优化训练参数（回测与智能投注共用）",
         value=True,
         key="auto_train_params_mode",
-        help=(
-            f"新机器不足 {AUTO_NEW_MACHINE_ONLY_MIN} 期时用扩展历史（最近 {EXTENDED_HISTORY_CAP} 期）；"
-            f"达到后改为仅用 {NEW_MACHINE_START_PERIOD} 期及以后的新机器数据"
-        )
+        help=f"仅使用 {NEW_MACHINE_START_PERIOD} 期及以后的新机器数据，并随累计期数自动调整训练窗口"
     )
     
     _preview_ctx = build_prediction_context(
@@ -5319,13 +5301,13 @@ st.markdown("---")
 st.subheader("📊 策略回测（5种方法对比）")
 st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
 
-# 获取数据（扩展历史模式下保留全库，由每期 apply_training_universe 裁剪）
+# 获取数据（自动模式仅保留新机器期次）
 backtest_draws = load_draws_from_supabase()
 _bt_cfg_all = resolve_train_config(backtest_draws or [], exclude_latest=True) if backtest_draws else {}
 if backtest_draws and _bt_cfg_all.get('use_new_machine_only'):
     backtest_draws = filter_draws_for_machine(backtest_draws, True)
 
-_min_bt = _bt_cfg_all.get('min_backtest_draws', 50) if backtest_draws else 50
+_min_bt = _bt_cfg_all.get('min_backtest_draws', 17) if backtest_draws else 17
 if backtest_draws is None or len(backtest_draws) < _min_bt:
     st.warning(f"⚠️ 数据不足，至少需要 {_min_bt} 期数据才能进行回测")
 else:
@@ -5336,7 +5318,7 @@ else:
     st.info(f"📊 回测数据 {total_draws_count} 期 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
     st.caption(
         format_train_config_summary(bt_cfg)
-        + " · 整段固定窗；新机器不足时用扩展历史；删最新1期可复现最后一期"
+        + " · 仅新机器 + 整段固定窗；删最新1期可复现最后一期"
     )
     
     # ========== 回测参数设置 ==========
