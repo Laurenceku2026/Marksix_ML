@@ -2788,8 +2788,9 @@ def generate_bets_method2_hybrid(draws: List[Dict], num_bets: int, num_count: in
 
 # ==================== 方法3：LightGBM ====================
 NEW_MACHINE_START_PERIOD = 26047  # 新机器起始期（用户确认）
-# 自动模式固定「仅新机器」：旧机器+新机器混训会拉大窗口，实测反而更差
-EXTENDED_HISTORY_CAP = 150  # 仅手动/调试保留；自动模式不再使用
+ML_PREFERRED_LOOKBACK = 100       # 最早版 XGBoost 默认窗
+ML_MIN_FULL_DRAWS = 110           # lookback 100 所需最少全历史期数
+ML_METHOD_KEYS = frozenset({"方法3", "方法4", "方法5"})
 
 
 def _period_to_int(period) -> int:
@@ -2845,7 +2846,7 @@ def max_viable_ml_lookback(n: int) -> int:
 
 
 def optimal_ml_lookback(n: int) -> int:
-    """在可训练前提下，按新机器数据量选取偏保守的 ML lookback"""
+    """规则侧参考用的小样本 ML lookback（仅新机器）"""
     if n < 17:
         return max(8, n - 3)
     max_lb = max_viable_ml_lookback(n)
@@ -2860,6 +2861,19 @@ def optimal_ml_lookback(n: int) -> int:
     return min(max_lb, target)
 
 
+def optimal_ml_lookback_full_history(n: int) -> int:
+    """ML 方法（3/4/5）：优先用最早版 100 期窗，全历史不足时取最大可行值"""
+    if n < 17:
+        return max(8, n - 3)
+    if n >= ML_MIN_FULL_DRAWS:
+        return ML_PREFERRED_LOOKBACK
+    return max_viable_ml_lookback(n)
+
+
+def is_ml_method(method_key: str) -> bool:
+    return method_key in ML_METHOD_KEYS
+
+
 def optimal_rule_window(n: int, ml_lookback: int) -> int:
     """规则类方法（A/B/1/2）训练窗口——贴合新机器样本，避免过大"""
     if n < 35:
@@ -2870,13 +2884,16 @@ def optimal_rule_window(n: int, ml_lookback: int) -> int:
 
 
 def select_auto_training_draws(
-    draws: List[Dict], exclude_latest: bool = False
+    draws: List[Dict], exclude_latest: bool = False, method_key: Optional[str] = None
 ) -> Tuple[List[Dict], bool, str]:
     """
-    自动模式：始终仅用新机器期次（26047+）。
-    返回 (training_draws, use_new_machine_only, data_source_label)
+    自动模式训练集：
+    - A/B/1/2：仅新机器（26047+）
+    - 3/4/5：该期之前的全历史（最早版 XGBoost 做法）
     """
     base = draws[:-1] if exclude_latest and len(draws) > 1 else list(draws)
+    if method_key and is_ml_method(method_key):
+        return base, False, 'full_history'
     training = filter_draws_for_machine(base, True)
     return training, True, 'new_machine'
 
@@ -2884,41 +2901,53 @@ def select_auto_training_draws(
 def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -> Dict[str, Any]:
     """
     自动计算训练参数（回测与智能投注共用）。
-    仅基于新机器数据，窗口随新机器累计期数增长。
+    规则方法按新机器；ML 方法按全历史 + lookback 100（数据够时）。
     """
-    training, use_nm, data_src = select_auto_training_draws(draws, exclude_latest=exclude_latest)
+    base = draws[:-1] if exclude_latest and len(draws) > 1 else list(draws)
+    nm_training = filter_draws_for_machine(base, True)
     new_machine_count = count_new_machine_draws(draws)
-    n = len(training)
-    ml_lb = optimal_ml_lookback(n)
-    rule_lb = optimal_rule_window(n, ml_lb)
+    n_nm = len(nm_training)
+    n_full = len(base)
+    ml_lb_nm = optimal_ml_lookback(n_nm)
+    rule_lb = optimal_rule_window(n_nm, ml_lb_nm)
+    ml_lb = optimal_ml_lookback_full_history(n_full)
     p_start, p_end = get_new_machine_period_range(draws)
 
-    if n < 17:
-        mode = 'insufficient'
-    elif n < 35:
-        mode = 'minimal'
-    elif n < 80:
-        mode = 'short'
-    elif n < 200:
-        mode = 'medium'
+    if n_nm < 17:
+        nm_mode = 'insufficient'
+    elif n_nm < 35:
+        nm_mode = 'minimal'
+    elif n_nm < 80:
+        nm_mode = 'short'
+    elif n_nm < 200:
+        nm_mode = 'medium'
     else:
-        mode = 'full'
+        nm_mode = 'full'
 
-    sliding_windows = max(0, n - ml_lb - 1)
+    if n_full >= ML_MIN_FULL_DRAWS:
+        ml_mode = 'full_history_100'
+    elif n_full < 17:
+        ml_mode = 'insufficient'
+    else:
+        ml_mode = 'reduced'
+
+    sliding_windows = max(0, n_full - ml_lb - 1)
     return {
         'method_a_window': rule_lb,
         'method_b_window': rule_lb,
         'method1_window': rule_lb,
         'method3_window': ml_lb,
         'method4_window': ml_lb,
-        'trend_window': 4 if n < 50 else min(6, max(4, ml_lb // 5)),
-        'use_new_machine_only': use_nm,
-        'data_source': data_src,
-        'training_draws': training,
+        'trend_window': 4 if n_nm < 50 else min(6, max(4, rule_lb // 5)),
+        'use_new_machine_only': True,
+        'data_source': 'hybrid',
+        'training_draws': nm_training,
         'new_machine_count': new_machine_count,
-        'effective_count': n,
+        'effective_count': n_nm,
+        'full_history_count': n_full,
         'ml_lookback': ml_lb,
-        'ml_mode': mode,
+        'ml_mode': ml_mode,
+        'rule_mode': nm_mode,
         'sliding_windows': sliding_windows,
         'period_start': p_start,
         'period_end': p_end,
@@ -2947,8 +2976,10 @@ def build_prediction_context(
     """回测与智能投注共用的训练集 + 参数解析（相同输入必须产出相同投注）"""
     if st.session_state.get('auto_train_params_mode', True):
         cfg = compute_auto_train_params(all_draws, exclude_latest=exclude_latest)
-        training_draws = cfg['training_draws']
-        use_nm = cfg['use_new_machine_only']
+        training_draws, _, _ = select_auto_training_draws(
+            all_draws, exclude_latest=exclude_latest, method_key=method_key
+        )
+        use_nm = not is_ml_method(method_key)
     else:
         use_nm = st.session_state.get('use_new_machine_only', False)
         training_draws = get_training_draws(
@@ -3003,14 +3034,18 @@ def resolve_train_config(draws: List[Dict], exclude_latest: bool = False) -> Dic
     }
 
 
-def apply_training_universe(raw_draws: List[Dict], cfg: Dict[str, Any]) -> List[Dict]:
-    """按当前配置裁剪训练集，保证回测每期与智能投注看到相同范围的数据"""
+def apply_training_universe(raw_draws: List[Dict], cfg: Dict[str, Any], method_key: str) -> List[Dict]:
+    """
+    回测每期 walk-forward 训练集（不含被预测期）：
+    - A/B/1/2 → 仅新机器
+    - 3/4/5 → 全历史
+    """
     if not raw_draws:
         return raw_draws
-    if cfg.get('use_new_machine_only'):
+    if cfg.get('auto') and is_ml_method(method_key):
+        return raw_draws
+    if cfg.get('use_new_machine_only') or cfg.get('data_source') == 'new_machine':
         return filter_draws_for_machine(raw_draws, True)
-    if cfg.get('data_source') == 'extended_history':
-        return raw_draws[-EXTENDED_HISTORY_CAP:] if len(raw_draws) > EXTENDED_HISTORY_CAP else raw_draws
     return raw_draws
 
 
@@ -3031,28 +3066,30 @@ def fallback_bets_method_a(
 
 def format_train_config_summary(cfg: Dict[str, Any]) -> str:
     mode_labels = {
-        'insufficient': '数据不足(建议用规则方法)',
-        'minimal': '极少数据模式',
-        'short': '短期模式',
-        'medium': '中期模式',
-        'full': '充足数据模式',
-        'extended': '扩展历史(新机器样本不足)',
-        'manual': '手动模式',
+        'insufficient': '数据不足',
+        'minimal': '极少数据',
+        'short': '短期',
+        'medium': '中期',
+        'full': '充足',
+        'full_history_100': '全历史100窗',
+        'reduced': '全历史(窗缩小)',
+        'manual': '手动',
     }
     src = '自动' if cfg.get('auto') else '手动'
     pr = ''
     if cfg.get('period_start'):
-        pr = f" | 期次 {cfg['period_start']}-{cfg['period_end']}"
-    data_src = cfg.get('data_source', 'new_machine' if cfg.get('use_new_machine_only') else 'full')
-    data_label = {
-        'new_machine': '仅新机器',
-        'extended_history': f'扩展历史≤{EXTENDED_HISTORY_CAP}',
-        'full': '全历史',
-    }.get(data_src, data_src)
+        pr = f" | 新机器 {cfg['period_start']}-{cfg['period_end']}"
+    n_nm = cfg.get('effective_count', 0)
+    n_full = cfg.get('full_history_count', n_nm)
+    if cfg.get('data_source') == 'hybrid':
+        data_label = f'混合: 规则{n_nm}期新机器 / ML{n_full}期全历史'
+    else:
+        data_label = '仅新机器' if cfg.get('use_new_machine_only') else '全历史'
+    rule_mode = cfg.get('rule_mode', cfg.get('ml_mode', 'manual'))
     return (
-        f"📡 {src} | {data_label} | 新机器 {cfg['new_machine_count']} 期{pr} | "
-        f"有效训练 {cfg['effective_count']} 期 | "
-        f"ML窗口 {cfg['ml_lookback']} ({mode_labels.get(cfg['ml_mode'], cfg['ml_mode'])}) | "
+        f"📡 {src} | {data_label}{pr} | "
+        f"规则窗 {cfg.get('method_a_window', '?')} ({mode_labels.get(rule_mode, rule_mode)}) | "
+        f"ML窗 {cfg['ml_lookback']} ({mode_labels.get(cfg.get('ml_mode'), cfg.get('ml_mode', ''))}) | "
         f"滑动窗 {cfg['sliding_windows']} 个"
     )
 
@@ -3214,7 +3251,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
     方法3：LightGBM - 添加和值筛选（500次 + 降级策略）
     """
     if not LGB_AVAILABLE:
-        return fallback_bets_method_a(draws, num_bets, num_count, sum_predict_method, random_seed)
+        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50, sum_predict_method)
     
     if random_seed is not None:
         random.seed(random_seed)
@@ -3226,7 +3263,7 @@ def generate_bets_method3_lightgbm(draws: List[Dict], num_bets: int, num_count: 
     model = train_lightgbm_model(draws, lookback=lightgbm_lookback)
     
     if model is None:
-        return fallback_bets_method_a(draws, num_bets, num_count, sum_predict_method, random_seed)
+        return generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, 50, sum_predict_method)
     
     predicted_numbers = predict_with_lightgbm(model, draws, lookback=lightgbm_lookback)
     if predicted_numbers is None or len(predicted_numbers) < num_count:
@@ -3433,23 +3470,36 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_see
         return None
     
     try:
-        # ========== 策略 A：极简特征 + 极端正则化 ==========
+        # ========== 小样本 vs 全历史（最早版大模型） ==========
         if lookback <= 20:
             xgb_model = xgb.XGBClassifier(
-                n_estimators=30,          # 树极少
-                max_depth=2,              # 深度只有2
+                n_estimators=30,
+                max_depth=2,
                 learning_rate=0.05,
-                reg_lambda=100,           # 极强L2
-                reg_alpha=10,             # 极强L1
-                gamma=5,                  # 分裂所需的最小损失减少（越大越保守）
-                min_child_weight=3,       # 叶子最小权重
+                reg_lambda=100,
+                reg_alpha=10,
+                gamma=5,
+                min_child_weight=3,
                 random_state=random_seed,
                 use_label_encoder=False,
                 eval_metric='logloss',
                 verbosity=0
             )
+            nn_hidden = (32, 16)
+            nn_iter = 100
+        elif lookback >= ML_PREFERRED_LOOKBACK:
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=150,
+                max_depth=6,
+                learning_rate=0.08,
+                random_state=random_seed,
+                use_label_encoder=False,
+                eval_metric='logloss',
+                verbosity=0
+            )
+            nn_hidden = (64, 32, 16)
+            nn_iter = 200
         else:
-            # 原来的正常模式（大于20期时使用）
             xgb_model = xgb.XGBClassifier(
                 n_estimators=80,
                 max_depth=4,
@@ -3459,12 +3509,14 @@ def train_xgboost_nn_ensemble(draws: List[Dict], lookback: int = 100, random_see
                 eval_metric='logloss',
                 verbosity=0
             )
+            nn_hidden = (32, 16)
+            nn_iter = 100
         # ===================================================
-        
+
         nn_model = MLPClassifier(
-            hidden_layer_sizes=(32, 16),
+            hidden_layer_sizes=nn_hidden,
             activation='relu',
-            max_iter=100,
+            max_iter=nn_iter,
             random_state=42,
             early_stopping=len(X) >= 200,
             validation_fraction=0.1 if len(X) >= 200 else 0.0
@@ -3528,7 +3580,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
     方法4：XGBoost + 神经网络集成 - 添加和值筛选（500次 + 降级策略）
     """
     if not XGB_AVAILABLE or not SKLEARN_AVAILABLE:
-        return fallback_bets_method_a(draws, num_bets, num_count, sum_predict_method, random_seed)
+        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
     if random_seed is not None:
         random.seed(random_seed)
@@ -3540,7 +3592,7 @@ def generate_bets_method4_ensemble(draws: List[Dict], num_bets: int, num_count: 
     ensemble = train_xgboost_nn_ensemble(draws, lookback=ensemble_lookback)
     
     if ensemble is None:
-        return fallback_bets_method_a(draws, num_bets, num_count, sum_predict_method, random_seed)
+        return generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, 100, sum_predict_method)
     
     predicted_numbers = predict_with_ensemble(ensemble, draws, lookback=ensemble_lookback)
     if predicted_numbers is None or len(predicted_numbers) < num_count:
@@ -3637,7 +3689,7 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
                                      method3_window: int = 100, method4_window: int = 200,
                                      sum_predict_method: str = "移动平均(7期)") -> List[Dict]:
     """
-    方法5：综合模式（方法A加权 + 方法1-4，取高频号码 + 规律加权）- 添加和值筛选
+    方法5：综合模式（方法1-4 + 规律加权；规则用新机器子集，ML 用全历史）
     """
     if random_seed is not None:
         random.seed(random_seed)
@@ -3645,35 +3697,27 @@ def generate_bets_method5_ensemble(draws: List[Dict], num_bets: int, num_count: 
     else:
         random.seed()
         np.random.seed()
+
+    rule_draws = filter_draws_for_machine(draws, True) if len(draws) > 0 else draws
+    ml_draws = draws
     
     all_numbers = []
     
-    # 方法A（当前回测最稳，权重 ×2）
-    bets_a = generate_bets_method_a(
-        draws, num_bets, num_count,
-        sum_predict_method=sum_predict_method, random_seed=random_seed,
-    )
-    for bet in bets_a:
-        all_numbers.extend(bet['numbers'])
-        all_numbers.extend(bet['numbers'])
-    
-    # 方法1
-    bets1 = generate_bets_method1_current(draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method)
+    # 方法1/2：新机器
+    bets1 = generate_bets_method1_current(rule_draws, num_bets, num_count, trend_window, random_seed, method1_window, sum_predict_method)
     for bet in bets1:
         all_numbers.extend(bet['numbers'])
     
-    # 方法2
-    bets2 = generate_bets_method2_hybrid(draws, num_bets, num_count, trend_window, random_seed, method2_window, sum_predict_method)
+    bets2 = generate_bets_method2_hybrid(rule_draws, num_bets, num_count, trend_window, random_seed, method2_window, sum_predict_method)
     for bet in bets2:
         all_numbers.extend(bet['numbers'])
     
-    # 方法3
-    bets3 = generate_bets_method3_lightgbm(draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method)
+    # 方法3/4：全历史
+    bets3 = generate_bets_method3_lightgbm(ml_draws, num_bets, num_count, trend_window, random_seed, method3_window, sum_predict_method)
     for bet in bets3:
         all_numbers.extend(bet['numbers'])
     
-    # 方法4
-    bets4 = generate_bets_method4_ensemble(draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method)
+    bets4 = generate_bets_method4_ensemble(ml_draws, num_bets, num_count, trend_window, random_seed, method4_window, sum_predict_method)
     for bet in bets4:
         all_numbers.extend(bet['numbers'])
     
@@ -3968,7 +4012,7 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     
     for i in range(test_periods):
         raw_train = draws[:-(test_periods - i)]
-        train_draws = apply_training_universe(raw_train, fixed_cfg)
+        train_draws = apply_training_universe(raw_train, fixed_cfg, method_key)
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
         
@@ -4873,7 +4917,7 @@ with st.expander("⚙️ 高级设置"):
         "🤖 自动优化训练参数（回测与智能投注共用）",
         value=True,
         key="auto_train_params_mode",
-        help=f"仅使用 {NEW_MACHINE_START_PERIOD} 期及以后的新机器数据，并随累计期数自动调整训练窗口"
+        help=f"规则方法(A/B/1/2)仅新机器 {NEW_MACHINE_START_PERIOD}+；ML(3/4/5)用全历史 lookback {ML_PREFERRED_LOOKBACK}"
     )
     
     _preview_ctx = build_prediction_context(
@@ -4976,18 +5020,20 @@ with st.expander("⚙️ 高级设置"):
     )
     with st.expander("📋 如何复现回测最后一期的投注号码", expanded=False):
         st.markdown("""
-**推荐（删最新 1 期）**
-1. 记住回测表格中**最后一期**的方法、组数、码数、种子模式
-2. 管理员页删除**最新 1 期**，重新加载
-3. 智能投注用相同条件，**关闭**「回测对齐模式」→ 生成
-4. 结果应与回测最后一期 **100% 一致**
+**每期回测逻辑（walk-forward）**
+- 预测第 T 期时，训练集 = **T 之前所有期**（不含 T）
+- 规则方法 A/B/1/2：只用其中 **新机器 26047+**
+- ML 方法 3/4/5：用 **T 之前全历史**（最早版 XGBoost 做法）
 
-**不删数据（对齐模式）**
-- 保留全量数据，**开启**「回测对齐模式」→ 同样应复现最后一期
+**复现回测最后一期（推荐：删最新 1 期）**
+1. 记住回测最后一期的方法、组数、码数、种子
+2. 删除最新 1 期后重新加载
+3. 智能投注相同条件，**关闭**对齐模式 → 生成
+4. 应与回测最后一行 **100% 一致**
 
-> 回测整段共用一套固定训练窗（按「去掉最新一期」的数据量自动计算），既接近原先 `_good` 效果，又保证最后一期可复现。
->
-> 若要复现更早某一期：请关掉自动参数，**手动填入**回测界面显示的那套训练期数后再删数据生成。
+**不删数据**：开启「回测对齐模式」等效于去掉最新一期再训练。
+
+> 固定训练窗按「去掉最新一期」计算；中间某期复现需删到该期之前并手动锁定窗参数。
         """)
 
 # 统一训练配置预览（对齐模式=去掉最新一期，与回测固定窗同源）
@@ -5301,11 +5347,9 @@ st.markdown("---")
 st.subheader("📊 策略回测（5种方法对比）")
 st.caption("测试不同策略在历史数据上的表现（基于当前Supabase中的数据）")
 
-# 获取数据（自动模式仅保留新机器期次）
+# 回测保留全历史（ML 需要）；规则方法在每期循环内再筛新机器
 backtest_draws = load_draws_from_supabase()
 _bt_cfg_all = resolve_train_config(backtest_draws or [], exclude_latest=True) if backtest_draws else {}
-if backtest_draws and _bt_cfg_all.get('use_new_machine_only'):
-    backtest_draws = filter_draws_for_machine(backtest_draws, True)
 
 _min_bt = _bt_cfg_all.get('min_backtest_draws', 17) if backtest_draws else 17
 if backtest_draws is None or len(backtest_draws) < _min_bt:
@@ -5318,7 +5362,7 @@ else:
     st.info(f"📊 回测数据 {total_draws_count} 期 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
     st.caption(
         format_train_config_summary(bt_cfg)
-        + " · 仅新机器 + 整段固定窗；删最新1期可复现最后一期"
+        + " · 混合训练：规则=新机器，ML=全历史；每期 walk-forward 不含被测期"
     )
     
     # ========== 回测参数设置 ==========
@@ -5452,7 +5496,7 @@ else:
         
         for i in range(test_periods):
             raw_train = draws[:-(test_periods - i)]
-            train_draws = apply_training_universe(raw_train, fixed_cfg)
+            train_draws = apply_training_universe(raw_train, fixed_cfg, "方法A")
             test_draw = draws[-(test_periods - i)]
             test_period = test_draw.get('period', '')
             
@@ -5554,7 +5598,7 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
     
     for i in range(test_periods):
         raw_train = draws[:-(test_periods - i)]
-        train_draws = apply_training_universe(raw_train, fixed_cfg)
+        train_draws = apply_training_universe(raw_train, fixed_cfg, "方法B")
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
         
