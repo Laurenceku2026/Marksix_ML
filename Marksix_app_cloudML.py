@@ -3871,18 +3871,27 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
     """
     单方法回测 - 完整修复版
     
-    修复内容：
-    1. 使用正确的N码复式奖金计算（支持6-10码）
-    2. 使用正确的匹配分数计算
-    3. 成本计算：每组成本 = C(num_count, 6) × 5（半注）
-    4. 修复缓存key包含num_count，避免不同号码数的缓存冲突
+    窗口策略（与 _good 一致的整段固定窗，且最后一期可复现）：
+    - 整段回测共用一套训练窗口，避免前期因样本变少而窗过小、拖累回测
+    - 窗口按「去掉最新一期」的训练集计算（= 预测最后一期时的训练集）
+    - 因此：删除最新 1 期（或开启回测对齐）后，智能投注可 100% 复现回测最后一期
     """
     if test_periods < 1 or len(draws) <= test_periods:
         return None
-    first_train = draws[:-test_periods]
-    first_cfg = resolve_train_config_for_prediction(first_train)
-    min_needed = first_cfg.get('min_backtest_draws', 17) + test_periods
-    if len(draws) < min_needed:
+    # 锚定最后一期的训练集：删最新1期后智能投注的参数与此完全一致
+    anchor_train = draws[:-1]
+    fixed_cfg = resolve_train_config_for_prediction(anchor_train)
+    fixed_train_window = get_method_train_window(
+        method_key,
+        fixed_cfg['method_a_window'],
+        fixed_cfg['method_b_window'],
+        fixed_cfg['method1_window'],
+        fixed_cfg['method3_window'],
+        fixed_cfg['method4_window'],
+    )
+    fixed_trend_window = fixed_cfg['trend_window']
+    min_needed = fixed_cfg.get('min_backtest_draws', 17) + 1  # +1 为被测的最新一期
+    if len(draws) < max(min_needed, fixed_train_window + test_periods):
         return None
     
     total_cost = 0
@@ -3897,16 +3906,6 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
-        period_cfg = resolve_train_config_for_prediction(train_draws)
-        period_train_window = get_method_train_window(
-            method_key,
-            period_cfg['method_a_window'],
-            period_cfg['method_b_window'],
-            period_cfg['method1_window'],
-            period_cfg['method3_window'],
-            period_cfg['method4_window'],
-        )
-        period_trend_window = period_cfg['trend_window']
         
         seed_val = compute_prediction_seed(
             method_key, seed_mode,
@@ -3917,10 +3916,10 @@ def run_backtest_single_method(draws: List[Dict], method_key: str, num_bets: int
         
         bets = dispatch_generate_bets(
             method_key, train_draws, num_bets, num_count,
-            period_trend_window, seed_val, period_train_window, sum_predict_method,
-            method1_window=period_cfg['method1_window'],
-            method3_window=period_cfg['method3_window'],
-            method4_window=period_cfg['method4_window'],
+            fixed_trend_window, seed_val, fixed_train_window, sum_predict_method,
+            method1_window=fixed_cfg['method1_window'],
+            method3_window=fixed_cfg['method3_window'],
+            method4_window=fixed_cfg['method4_window'],
         )
         
         # 计算最佳匹配的奖金和匹配分数
@@ -4908,23 +4907,25 @@ with st.expander("⚙️ 高级设置"):
         "🔁 回测对齐模式（排除最新一期，用于验证回测「最后一期」）",
         value=False,
         key="backtest_align_mode",
-        help="验证回测最后一期时开启；复现中间某期时请关闭，并删除该期及之后数据"
+        help="开启后训练集与参数与「删除最新1期」相同，应复现回测最后一期号码"
     )
-    with st.expander("📋 如何复现回测某一期的投注号码", expanded=False):
+    with st.expander("📋 如何复现回测最后一期的投注号码", expanded=False):
         st.markdown("""
-**复现中间某期（例：回测 26069，当前库有到 26072）**
-1. 在管理员页删除 **26069 及之后** 所有期次，重新加载数据（最新剩 26068）
-2. 智能投注选 **相同方法、组数、码数、种子模式与种子值**
-3. **关闭**「回测对齐模式」→ 生成投注
-4. 结果应与回测表格中 26069 那一行 **100% 一致**
+**推荐（删最新 1 期）**
+1. 记住回测表格中**最后一期**的方法、组数、码数、种子模式
+2. 管理员页删除**最新 1 期**，重新加载
+3. 智能投注用相同条件，**关闭**「回测对齐模式」→ 生成
+4. 结果应与回测最后一期 **100% 一致**
 
-**复现最后一期（例：回测 26072）**
-- 保留全量数据，**开启**「回测对齐模式」，或删除 26072 后关闭对齐模式
+**不删数据（对齐模式）**
+- 保留全量数据，**开启**「回测对齐模式」→ 同样应复现最后一期
 
-> 参数（ML 窗口等）按**实际训练期数**自动计算，与回测每期逻辑相同。
+> 回测整段共用一套固定训练窗（按「去掉最新一期」的数据量自动计算），既接近原先 `_good` 效果，又保证最后一期可复现。
+>
+> 若要复现更早某一期：请关掉自动参数，**手动填入**回测界面显示的那套训练期数后再删数据生成。
         """)
 
-# 统一训练配置预览（基于实际训练集，与回测每期逻辑一致）
+# 统一训练配置预览（对齐模式=去掉最新一期，与回测固定窗同源）
 _pred_ctx = build_prediction_context(
     draws,
     parse_method_key(ai_model),
@@ -5247,11 +5248,12 @@ if backtest_draws is None or len(backtest_draws) < _min_bt:
 else:
     sorted_backtest_draws = sorted(backtest_draws, key=lambda x: int(x.get('period', 0)) if str(x.get('period', 0)).isdigit() else 0)
     total_draws_count = len(backtest_draws)
-    bt_cfg = resolve_train_config(backtest_draws, exclude_latest=False)
+    # 与回测循环一致：固定窗按「去掉最新一期」计算，保证删最新1期后智能投注可复现最后一期
+    bt_cfg = resolve_train_config_for_prediction(backtest_draws[:-1]) if len(backtest_draws) > 1 else resolve_train_config(backtest_draws, exclude_latest=False)
     st.info(f"📊 回测数据 {total_draws_count} 期 (范围: {sorted_backtest_draws[0].get('period')} - {sorted_backtest_draws[-1].get('period')})")
     st.caption(
         format_train_config_summary(bt_cfg)
-        + " · 回测每期按**当期训练集**重算 ML 窗口（与智能投注删数据复现逻辑一致）"
+        + " · 整段回测共用固定训练窗（按去掉最新一期计算；删最新1期后可复现最后一期）"
     )
     
     # ========== 回测参数设置 ==========
@@ -5359,9 +5361,12 @@ else:
                           trend_window=4,
                           hot_count=6, cold_count=1, hot_range=(0, 10),
                           hot_temperature=0.8, cold_temperature=0.8, zone_window=15):
-        """方法A回测函数"""
-        if len(draws) < test_periods + 8:
+        """方法A回测函数（整段固定窗，锚定 draws[:-1]，最后一期可删期复现）"""
+        if test_periods < 1 or len(draws) < test_periods + 8:
             return None
+        fixed_cfg = resolve_train_config_for_prediction(draws[:-1])
+        fixed_trend_window = fixed_cfg['trend_window']
+        fixed_train_window = fixed_cfg['method_a_window']
         
         total_cost = 0
         total_prize = 0
@@ -5384,8 +5389,6 @@ else:
             train_draws = draws[:-(test_periods - i)]
             test_draw = draws[-(test_periods - i)]
             test_period = test_draw.get('period', '')
-            period_cfg = resolve_train_config_for_prediction(train_draws)
-            period_trend_window = period_cfg['trend_window']
             
             seed_val = compute_prediction_seed(
                 "方法A", seed_mode,
@@ -5396,7 +5399,7 @@ else:
             
             bets = dispatch_generate_bets(
                 "方法A", train_draws, num_bets, num_count,
-                period_trend_window, seed_val, period_cfg['method_a_window'], sum_predict_method,
+                fixed_trend_window, seed_val, fixed_train_window, sum_predict_method,
                 method_a_kwargs=method_a_kwargs,
             )
             
@@ -5467,10 +5470,13 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
                           seed_mode, fixed_seed_value, sum_predict_method,
                           trend_window=4) -> Optional[Dict]:
     """
-    方法B回测函数（新胆拖混合，基于方法A评分）
+    方法B回测函数（新胆拖混合；整段固定窗，锚定 draws[:-1]，最后一期可删期复现）
     """
-    if len(draws) < test_periods + 8:
+    if test_periods < 1 or len(draws) < test_periods + 8:
         return None
+    fixed_cfg = resolve_train_config_for_prediction(draws[:-1])
+    fixed_trend_window = fixed_cfg['trend_window']
+    fixed_train_window = fixed_cfg['method_b_window']
     
     total_cost = 0
     total_prize = 0
@@ -5484,8 +5490,6 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         test_period = test_draw.get('period', '')
-        period_cfg = resolve_train_config_for_prediction(train_draws)
-        period_trend_window = period_cfg['trend_window']
         
         seed_val = compute_prediction_seed(
             "方法B", seed_mode,
@@ -5496,7 +5500,7 @@ def run_backtest_method_b(draws, num_bets, num_count, test_periods, train_window
         
         bets = dispatch_generate_bets(
             "方法B", train_draws, num_bets, num_count,
-            period_trend_window, seed_val, period_cfg['method_b_window'], sum_predict_method,
+            fixed_trend_window, seed_val, fixed_train_window, sum_predict_method,
         )
         
         best_prize = 0
