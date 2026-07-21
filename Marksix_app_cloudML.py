@@ -2885,6 +2885,8 @@ def render_train_window_settings(section: str, preview_cfg: Dict[str, Any]) -> D
             'method4_window': 'bt_shared_method4_window',
         }
     else:
+        # 智能投注先渲染：把上轮回测页的改动写回共用键（须在控件实例化前）
+        sync_train_window_bt_to_shared()
         auto_key = 'auto_train_params_mode'
         nm_key = 'use_new_machine_only'
         trend_key = 'shared_trend_window'
@@ -2957,9 +2959,6 @@ def render_train_window_settings(section: str, preview_cfg: Dict[str, Any]) -> D
         trend_window = st.number_input(
             "和值趋势窗口", min_value=2, max_value=20, value=4, step=1, key=trend_key
         )
-
-    if is_bt:
-        sync_train_window_bt_to_shared()
 
     return {
         'auto_train_params_mode': auto_train,
