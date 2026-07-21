@@ -2791,6 +2791,22 @@ NEW_MACHINE_START_PERIOD = 26047  # 新机器起始期（用户确认）
 ML_PREFERRED_LOOKBACK = 100       # 最早版 XGBoost 默认窗
 ML_MIN_FULL_DRAWS = 110           # lookback 100 所需最少全历史期数
 ML_METHOD_KEYS = frozenset({"方法3", "方法4", "方法5"})
+MANUAL_DEFAULT_TRAIN_WINDOW = 20
+
+
+def is_auto_train_window_mode() -> bool:
+    return st.session_state.get('auto_train_params_mode', False)
+
+
+def read_manual_train_windows() -> Dict[str, int]:
+    d = MANUAL_DEFAULT_TRAIN_WINDOW
+    return {
+        'method_b_window': int(st.session_state.get('shared_method_b_window', d)),
+        'method_a_window': int(st.session_state.get('shared_method_a_window', d)),
+        'method1_window': int(st.session_state.get('shared_method1_window', d)),
+        'method3_window': int(st.session_state.get('shared_method3_window', d)),
+        'method4_window': int(st.session_state.get('shared_method4_window', d)),
+    }
 
 
 def _period_to_int(period) -> int:
@@ -2957,8 +2973,8 @@ def compute_auto_train_params(draws: List[Dict], exclude_latest: bool = False) -
 
 
 def use_new_machine_training_flag(draws: Optional[List[Dict]] = None) -> bool:
-    """是否仅使用新机器期次训练（自动模式恒为 True）"""
-    if st.session_state.get('auto_train_params_mode', True):
+    """是否仅使用新机器期次训练（自动模式：规则方法用新机器）"""
+    if is_auto_train_window_mode():
         return True
     return st.session_state.get('use_new_machine_only', False)
 
@@ -2974,7 +2990,7 @@ def build_prediction_context(
     exclude_latest: bool = False,
 ) -> Dict[str, Any]:
     """回测与智能投注共用的训练集 + 参数解析（相同输入必须产出相同投注）"""
-    if st.session_state.get('auto_train_params_mode', True):
+    if is_auto_train_window_mode():
         cfg = compute_auto_train_params(all_draws, exclude_latest=exclude_latest)
         training_draws, _, _ = select_auto_training_draws(
             all_draws, exclude_latest=exclude_latest, method_key=method_key
@@ -2982,10 +2998,14 @@ def build_prediction_context(
         use_nm = not is_ml_method(method_key)
     else:
         use_nm = st.session_state.get('use_new_machine_only', False)
-        training_draws = get_training_draws(
-            all_draws, exclude_latest=exclude_latest, new_machine_only=use_nm
-        )
-        cfg = resolve_train_config_for_prediction(training_draws)
+        base = all_draws[:-1] if exclude_latest and len(all_draws) > 1 else list(all_draws)
+        if is_ml_method(method_key) and not use_nm:
+            training_draws = base
+        else:
+            training_draws = get_training_draws(
+                all_draws, exclude_latest=exclude_latest, new_machine_only=use_nm
+            )
+        cfg = resolve_train_config(all_draws, exclude_latest=exclude_latest)
         cfg = {**cfg, 'training_draws': training_draws}
     train_window = get_method_train_window(
         method_key,
@@ -3006,30 +3026,34 @@ def build_prediction_context(
 
 def resolve_train_config(draws: List[Dict], exclude_latest: bool = False) -> Dict[str, Any]:
     """解析当前生效的训练参数（自动/手动统一出口，回测与智能投注必须调用此函数）"""
-    if st.session_state.get('auto_train_params_mode', True):
+    if is_auto_train_window_mode():
         return compute_auto_train_params(draws, exclude_latest=exclude_latest)
 
     use_nm = st.session_state.get('use_new_machine_only', False)
-    training = get_training_draws(draws, exclude_latest=exclude_latest, new_machine_only=use_nm)
-    ml_lb = st.session_state.get('shared_method3_window', 15)
+    base = draws[:-1] if exclude_latest and len(draws) > 1 else list(draws)
+    if use_nm:
+        training = filter_draws_for_machine(base, True)
+    else:
+        training = base
+    wins = read_manual_train_windows()
+    ml_lb = wins['method3_window']
+    trend_window = st.session_state.get('shared_trend_window', 4)
     return {
-        'method_a_window': st.session_state.get('shared_method_a_window', 20),
-        'method_b_window': st.session_state.get('shared_method_b_window', 20),
-        'method1_window': st.session_state.get('shared_method1_window', 20),
-        'method3_window': ml_lb,
-        'method4_window': st.session_state.get('shared_method4_window', ml_lb),
-        'trend_window': st.session_state.get('shared_trend_window', 4),
+        **wins,
+        'trend_window': trend_window,
         'use_new_machine_only': use_nm,
-        'data_source': 'new_machine' if use_nm else 'full',
+        'data_source': 'manual',
         'training_draws': training,
         'new_machine_count': count_new_machine_draws(draws),
-        'effective_count': len(training),
+        'effective_count': len(filter_draws_for_machine(base, True)),
+        'full_history_count': len(base),
         'ml_lookback': ml_lb,
         'ml_mode': 'manual',
+        'rule_mode': 'manual',
         'sliding_windows': max(0, len(training) - ml_lb - 1),
         'period_start': get_new_machine_period_range(draws)[0],
         'period_end': get_new_machine_period_range(draws)[1],
-        'min_backtest_draws': 17 if use_nm else 50,
+        'min_backtest_draws': max(ml_min_total_draws(ml_lb) + 1, 17),
         'auto': False,
     }
 
@@ -3037,14 +3061,17 @@ def resolve_train_config(draws: List[Dict], exclude_latest: bool = False) -> Dic
 def apply_training_universe(raw_draws: List[Dict], cfg: Dict[str, Any], method_key: str) -> List[Dict]:
     """
     回测每期 walk-forward 训练集（不含被预测期）：
-    - A/B/1/2 → 仅新机器
-    - 3/4/5 → 全历史
+    - 自动模式：A/B/1/2 → 新机器；3/4/5 → 全历史
+    - 手动模式：ML 默认全历史；勾选「仅新机器」则全部只用新机器
     """
     if not raw_draws:
         return raw_draws
-    if cfg.get('auto') and is_ml_method(method_key):
-        return raw_draws
-    if cfg.get('use_new_machine_only') or cfg.get('data_source') == 'new_machine':
+    if is_ml_method(method_key):
+        if cfg.get('auto') or not cfg.get('use_new_machine_only', False):
+            return raw_draws
+    if cfg.get('auto') and not is_ml_method(method_key):
+        return filter_draws_for_machine(raw_draws, True)
+    if cfg.get('use_new_machine_only'):
         return filter_draws_for_machine(raw_draws, True)
     return raw_draws
 
@@ -3083,6 +3110,8 @@ def format_train_config_summary(cfg: Dict[str, Any]) -> str:
     n_full = cfg.get('full_history_count', n_nm)
     if cfg.get('data_source') == 'hybrid':
         data_label = f'混合: 规则{n_nm}期新机器 / ML{n_full}期全历史'
+    elif cfg.get('data_source') == 'manual':
+        data_label = f'手动窗(规则参考{n_nm}期新机器 / ML参考{n_full}期)'
     else:
         data_label = '仅新机器' if cfg.get('use_new_machine_only') else '全历史'
     rule_mode = cfg.get('rule_mode', cfg.get('ml_mode', 'manual'))
@@ -4914,10 +4943,10 @@ with st.expander("⚙️ 高级设置"):
     st.markdown("**📈 通用参数**")
     
     auto_train_params_mode = st.checkbox(
-        "🤖 自动优化训练参数（回测与智能投注共用）",
-        value=True,
+        "App自动优化训练窗口",
+        value=False,
         key="auto_train_params_mode",
-        help=f"规则方法(A/B/1/2)仅新机器 {NEW_MACHINE_START_PERIOD}+；ML(3/4/5)用全历史 lookback {ML_PREFERRED_LOOKBACK}"
+        help=f"勾选：按数据量自动计算。不勾选：使用下方手动输入（默认各方法 {MANUAL_DEFAULT_TRAIN_WINDOW} 期，回测与智能投注共用）"
     )
     
     _preview_ctx = build_prediction_context(
@@ -4961,7 +4990,7 @@ with st.expander("⚙️ 高级设置"):
         elif seed_mode == "用户输入固定种子":
             fixed_seed_value = st.number_input("输入固定种子值", min_value=0, max_value=1000000, value=7, step=1, key="fixed_seed_value")
         # 机器自动产生：不需要额外输入
-    st.markdown("**📊 训练期数（回测与智能投注共用）**")
+    st.markdown("**📊 训练窗口（回测与智能投注共用）**")
     if auto_train_params_mode:
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
@@ -4977,7 +5006,7 @@ with st.expander("⚙️ 高级设置"):
         if _preview_cfg['ml_mode'] == 'insufficient':
             st.warning("新机器数据不足 17 期，ML 方法可能降级；建议暂用方法 A/B/1/2")
         else:
-            st.success(f"已自动配置：规则方法窗口 {_preview_cfg['method1_window']} 期，ML 窗口 {_preview_cfg['ml_lookback']} 期")
+            st.caption(format_train_config_summary(_preview_cfg))
         use_new_machine_only = True
         method_b_window = _preview_cfg['method_b_window']
         method_a_window = _preview_cfg['method_a_window']
@@ -4989,28 +5018,31 @@ with st.expander("⚙️ 高级设置"):
             f"🆕 仅使用新机器数据（{NEW_MACHINE_START_PERIOD}期及以后）",
             value=False,
             key="use_new_machine_only",
+            help="不勾选时 ML 方法使用全历史；规则方法 A/B/1/2 仍可用全历史训练"
         )
         col1, col2, col3, col4, col5 = st.columns(5)
+        d = MANUAL_DEFAULT_TRAIN_WINDOW
         with col1:
             method_b_window = st.number_input(
-                "方法B期数", min_value=10, max_value=300, value=20, step=5, key="shared_method_b_window"
+                "方法B", min_value=8, max_value=300, value=d, step=1, key="shared_method_b_window"
             )
         with col2:
             method_a_window = st.number_input(
-                "方法A期数", min_value=10, max_value=300, value=20, step=5, key="shared_method_a_window"
+                "方法A", min_value=8, max_value=300, value=d, step=1, key="shared_method_a_window"
             )
         with col3:
             method1_window = st.number_input(
-                "方法1/2期数", min_value=10, max_value=300, value=20, step=5, key="shared_method1_window"
+                "方法1/2", min_value=8, max_value=300, value=d, step=1, key="shared_method1_window"
             )
         with col4:
             method3_window = st.number_input(
-                "方法3期数", min_value=8, max_value=300, value=15, step=1, key="shared_method3_window"
+                "方法3", min_value=8, max_value=300, value=d, step=1, key="shared_method3_window"
             )
         with col5:
             method4_window = st.number_input(
-                "方法4/5期数", min_value=8, max_value=300, value=15, step=1, key="shared_method4_window"
+                "方法4/5", min_value=8, max_value=300, value=d, step=1, key="shared_method4_window"
             )
+        st.caption(f"手动模式：各方法训练窗口默认 {d} 期，可在回测区同步修改")
     
     backtest_align_mode = st.checkbox(
         "🔁 回测对齐模式（排除最新一期，用于验证回测「最后一期」）",
@@ -5393,32 +5425,50 @@ else:
             test_num_count = st.selectbox("每注号码数", [6, 7, 8, 9, 10], index=1, key="backtest_num_count")
             test_bets = st.number_input("每期组数", min_value=1, max_value=20, value=4, step=1, key="backtest_bets")
         with col2:
-            if st.session_state.get('auto_train_params_mode', True):
+            if is_auto_train_window_mode():
                 test_trend_window = bt_cfg['trend_window']
                 st.metric("和值趋势窗口（自动）", test_trend_window)
             else:
-                test_trend_window = st.number_input(
-                    "和值趋势窗口", min_value=2, max_value=20, value=bt_cfg['trend_window'],
-                    step=1, key="backtest_trend_window"
-                )
+                test_trend_window = int(st.session_state.get('shared_trend_window', 4))
+                st.metric("和值趋势窗口", test_trend_window)
         
-        st.markdown("**📊 训练期数（与智能投注共用，请在上方高级设置调整）**")
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            st.metric("方法B", bt_cfg['method_b_window'])
-        with c2:
-            st.metric("方法A", bt_cfg['method_a_window'])
-        with c3:
-            st.metric("方法1/2", bt_cfg['method1_window'])
-        with c4:
-            st.metric("方法3", bt_cfg['method3_window'])
-        with c5:
-            st.metric("方法4/5", bt_cfg['method4_window'])
-        method_b_window = bt_cfg['method_b_window']
-        method_a_window = bt_cfg['method_a_window']
-        method1_window = bt_cfg['method1_window']
-        method3_window = bt_cfg['method3_window']
-        method4_window = bt_cfg['method4_window']
+        st.markdown("**📊 训练窗口（与智能投注共用）**")
+        if is_auto_train_window_mode():
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("方法B", bt_cfg['method_b_window'])
+            with c2:
+                st.metric("方法A", bt_cfg['method_a_window'])
+            with c3:
+                st.metric("方法1/2", bt_cfg['method1_window'])
+            with c4:
+                st.metric("方法3", bt_cfg['method3_window'])
+            with c5:
+                st.metric("方法4/5", bt_cfg['method4_window'])
+            method_b_window = bt_cfg['method_b_window']
+            method_a_window = bt_cfg['method_a_window']
+            method1_window = bt_cfg['method1_window']
+            method3_window = bt_cfg['method3_window']
+            method4_window = bt_cfg['method4_window']
+        else:
+            st.caption(f"与上方高级设置共用输入（默认各方法 {MANUAL_DEFAULT_TRAIN_WINDOW} 期）")
+            wins = read_manual_train_windows()
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("方法B", wins['method_b_window'])
+            with c2:
+                st.metric("方法A", wins['method_a_window'])
+            with c3:
+                st.metric("方法1/2", wins['method1_window'])
+            with c4:
+                st.metric("方法3", wins['method3_window'])
+            with c5:
+                st.metric("方法4/5", wins['method4_window'])
+            method_b_window = wins['method_b_window']
+            method_a_window = wins['method_a_window']
+            method1_window = wins['method1_window']
+            method3_window = wins['method3_window']
+            method4_window = wins['method4_window']
         
         # 第三行：回测期数设置
         st.markdown("**📈 回测期数设置**")
