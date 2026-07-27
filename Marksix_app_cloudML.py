@@ -2262,17 +2262,6 @@ print("=" * 60)
 # ============================================================
 
 # ==================== 回测/智能投注 统一入口 ====================
-METHOD_SEED_OFFSETS = {
-    "方法A": 50,
-    "方法B": 600,
-    "方法1": 100,
-    "方法2": 200,
-    "方法3": 300,
-    "方法4": 400,
-    "方法5": 500,
-}
-
-
 def parse_method_key(label: str) -> str:
     for key in ["方法A", "方法B", "方法1", "方法2", "方法3", "方法4", "方法5"]:
         if key in label:
@@ -2297,22 +2286,20 @@ def compute_prediction_seed(
     fixed_seed: int = 7,
     period_index: int = 0,
 ) -> int:
-    """回测与智能投注共用的随机种子计算（含方法偏移，开奖日默认21:30）"""
-    offset = METHOD_SEED_OFFSETS.get(method_key, 0)
+    """回测与智能投注共用的随机种子计算（无方法偏移，开奖日默认21:30）"""
+    # method_key 保留以兼容调用方；种子直接等于用户输入/日期时间戳，不再按方法加偏移
+    _ = method_key
     mode = normalize_seed_mode(seed_mode)
     if mode == "date":
         if seed_datetime is not None:
-            base = int(seed_datetime.timestamp())
-        elif draw_date:
+            return int(seed_datetime.timestamp())
+        if draw_date:
             dt = datetime.strptime(str(draw_date)[:10], '%Y-%m-%d')
-            base = int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
-        else:
-            base = 42 + period_index
-    elif mode == "fixed":
-        base = int(fixed_seed)
-    else:
-        base = random.randint(0, 1000000) + period_index
-    return base + offset
+            return int(datetime(dt.year, dt.month, dt.day, 21, 30).timestamp())
+        return 42 + period_index
+    if mode == "fixed":
+        return int(fixed_seed)
+    return random.randint(0, 1000000) + period_index
 
 
 def get_training_draws(all_draws: List[Dict], exclude_latest: bool = False,
@@ -4019,11 +4006,6 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
         st.error(f"数据不足：需要至少 {train_window + test_periods} 期数据")
         return None
     
-    # 方法偏移量
-    method_seed_offset = {
-        "方法1": 100, "方法2": 200, "方法3": 300, "方法4": 400, "方法5": 500
-    }.get(method_name.split(":")[0], 0)
-    
     results = []
     total_cost = 0
     total_prize = 0
@@ -4036,22 +4018,14 @@ def run_backtest(draws: List[Dict], method_name: str, num_bets: int, num_count: 
         train_draws = draws[:-(test_periods - i)]
         test_draw = draws[-(test_periods - i)]
         
-        # 设置随机种子
-        if seed_mode == "date":
-            test_date = test_draw.get('date')
-            if test_date:
-                try:
-                    dt = datetime.strptime(test_date[:10], '%Y-%m-%d')
-                    seed_val = int(datetime(dt.year, dt.month, dt.day, 21, 15).timestamp())
-                    seed_val += method_seed_offset
-                except:
-                    seed_val = 42 + method_seed_offset + i
-            else:
-                seed_val = 42 + method_seed_offset + i
-        elif seed_mode == "fixed":
-            seed_val = fixed_seed_value + method_seed_offset
-        else:
-            seed_val = random.randint(0, 1000000) + method_seed_offset
+        # 与智能投注一致：无方法偏移；日期模式用开奖日 21:30
+        method_key = parse_method_key(method_name)
+        seed_val = compute_prediction_seed(
+            method_key, seed_mode,
+            draw_date=test_draw.get('date'),
+            fixed_seed=fixed_seed_value,
+            period_index=i,
+        )
         
         random.seed(seed_val)
         np.random.seed(seed_val)
