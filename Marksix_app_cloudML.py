@@ -2781,6 +2781,603 @@ ML_METHOD_KEYS = frozenset({"方法3", "方法4", "方法5"})
 MANUAL_DEFAULT_TRAIN_WINDOW = 20
 
 
+# ==================== 机具诊断（均匀性 / FDR / 稳定性） ====================
+def _chi2_sf(x: float, df: int) -> float:
+    """χ² 生存函数 P(X>x)；优先 scipy，失败则粗近似"""
+    try:
+        from scipy.stats import chi2 as chi2_dist
+        return float(chi2_dist.sf(x, df))
+    except Exception:
+        # Wilson–Hilferty 近似转正态
+        if df <= 0:
+            return 1.0
+        h = 2.0 / (9.0 * df)
+        z = ((x / df) ** (1.0 / 3.0) - (1.0 - h)) / math.sqrt(h)
+        return float(0.5 * math.erfc(z / math.sqrt(2.0)))
+
+
+def _binom_two_sided_p(k: int, n: int, p: float) -> float:
+    try:
+        from scipy.stats import binomtest
+        return float(binomtest(k, n, p, alternative='two-sided').pvalue)
+    except Exception:
+        # 正态近似双侧
+        if n <= 0:
+            return 1.0
+        mu = n * p
+        var = n * p * (1.0 - p)
+        if var <= 1e-12:
+            return 1.0 if k == mu else 0.0
+        z = abs(k - mu) / math.sqrt(var)
+        return float(math.erfc(z / math.sqrt(2.0)))
+
+
+def benjamini_hochberg(pvalues: List[float], q: float = 0.1) -> List[bool]:
+    """BH-FDR：返回每个假设是否在水平 q 下显著"""
+    m = len(pvalues)
+    if m == 0:
+        return []
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    rejected = [False] * m
+    max_i = -1
+    for rank, idx in enumerate(order, start=1):
+        if pvalues[idx] <= q * rank / m:
+            max_i = rank
+    if max_i >= 0:
+        for rank, idx in enumerate(order, start=1):
+            if rank <= max_i:
+                rejected[idx] = True
+    return rejected
+
+
+def count_main_number_hits(draws: List[Dict]) -> np.ndarray:
+    """正码出现次数向量 shape (49,)，下标 0→号码1"""
+    counts = np.zeros(49, dtype=float)
+    for d in draws:
+        for n in d.get('numbers') or []:
+            if 1 <= int(n) <= 49:
+                counts[int(n) - 1] += 1
+    return counts
+
+
+def chi2_uniform_main(draws: List[Dict]) -> Dict[str, Any]:
+    """正码全局均匀性 χ²（每期 6 个正码，期望 E=6n/49）"""
+    n = len(draws)
+    counts = count_main_number_hits(draws)
+    expected = 6.0 * n / 49.0 if n else 0.0
+    if n < 8 or expected <= 0:
+        return {
+            'n': n, 'chi2': None, 'df': 48, 'p_value': None, 'expected': expected,
+            'counts': counts, 'ok': False, 'reason': '期数不足',
+        }
+    chi2 = float(np.sum((counts - expected) ** 2 / expected))
+    p = _chi2_sf(chi2, 48)
+    return {
+        'n': n, 'chi2': chi2, 'df': 48, 'p_value': p, 'expected': expected,
+        'counts': counts, 'ok': True, 'low_expected': expected < 5.0,
+    }
+
+
+def per_number_fdr_scan(draws: List[Dict], fdr_q: float = 0.1) -> pd.DataFrame:
+    """单号相对 Binomial(n, 6/49) 的偏离 + BH-FDR"""
+    n = len(draws)
+    counts = count_main_number_hits(draws)
+    p_hit = 6.0 / 49.0
+    rows = []
+    pvals = []
+    for i in range(49):
+        k = int(counts[i])
+        # 出现「期次数」：每期最多计 1 次正码命中
+        appear_periods = 0
+        num = i + 1
+        for d in draws:
+            if num in (d.get('numbers') or []):
+                appear_periods += 1
+        pv = _binom_two_sided_p(appear_periods, n, p_hit)
+        pvals.append(pv)
+        exp = n * p_hit
+        rows.append({
+            '号码': num,
+            '出现期数': appear_periods,
+            '期望': round(exp, 2),
+            '相对频率': round(appear_periods / exp, 3) if exp > 0 else None,
+            'p值': pv,
+        })
+    rejected = benjamini_hochberg(pvals, q=fdr_q)
+    for r, rej in zip(rows, rejected):
+        r['FDR显著'] = '是' if rej else '否'
+        r['方向'] = '偏热' if r['出现期数'] > r['期望'] else ('偏冷' if r['出现期数'] < r['期望'] else '持平')
+    df = pd.DataFrame(rows)
+    df = df.sort_values(['FDR显著', 'p值'], ascending=[False, True]).reset_index(drop=True)
+    return df
+
+
+def overdispersion_main(draws: List[Dict]) -> Dict[str, Any]:
+    """
+    号码计数过离散：若多套球异质混合，方差往往高于均匀多项。
+    在均匀多项下，单个号码计数 ≈ Binomial(n,6/49)，理论方差 = n p (1-p)。
+    """
+    n = len(draws)
+    if n < 15:
+        return {'ok': False, 'reason': '期数不足'}
+    p = 6.0 / 49.0
+    # 用「出现期数」
+    appears = np.zeros(49)
+    for d in draws:
+        seen = set(d.get('numbers') or [])
+        for num in seen:
+            if 1 <= int(num) <= 49:
+                appears[int(num) - 1] += 1
+    var_obs = float(np.var(appears, ddof=1))
+    var_theory = float(n * p * (1.0 - p))
+    ratio = var_obs / var_theory if var_theory > 0 else None
+    # 粗检验：49 个近似独立方差比；用 χ² 对合计
+    # Σ (O-μ)² / σ² ~ 近似 χ²_48
+    mu = n * p
+    sigma2 = var_theory
+    stat = float(np.sum((appears - mu) ** 2 / sigma2)) if sigma2 > 0 else None
+    p_value = _chi2_sf(stat, 48) if stat is not None else None
+    return {
+        'ok': True,
+        'var_obs': var_obs,
+        'var_theory': var_theory,
+        'ratio': ratio,
+        'stat': stat,
+        'p_value': p_value,
+    }
+
+
+def structure_odd_even_test(draws: List[Dict]) -> Dict[str, Any]:
+    """正码奇偶个数 0..6 的分布 vs 超几何/组合期望"""
+    n = len(draws)
+    if n < 10:
+        return {'ok': False, 'reason': '期数不足'}
+    obs = np.zeros(7)
+    for d in draws:
+        nums = d.get('numbers') or []
+        odd = sum(1 for x in nums if int(x) % 2 == 1)
+        if 0 <= odd <= 6:
+            obs[odd] += 1
+    # 期望：从 25 奇 24 偶中抽 6
+    from math import comb as _comb
+    total = _comb(49, 6)
+    exp = np.zeros(7)
+    for k in range(7):
+        if k <= 25 and (6 - k) <= 24:
+            exp[k] = n * _comb(25, k) * _comb(24, 6 - k) / total
+        else:
+            exp[k] = 0.0
+    # 合并期望过小的格
+    mask = exp >= 1.0
+    if mask.sum() < 3:
+        return {'ok': False, 'reason': '期望格过少'}
+    o = obs[mask]
+    e = exp[mask]
+    # 把未覆盖的质量并入最近格（简化：按比例缩放）
+    if e.sum() < n:
+        e = e * (n / e.sum())
+    chi2 = float(np.sum((o - e) ** 2 / e))
+    df = max(int(mask.sum()) - 1, 1)
+    return {'ok': True, 'chi2': chi2, 'df': df, 'p_value': _chi2_sf(chi2, df), 'obs': obs, 'exp': exp}
+
+
+def structure_zone_test(draws: List[Dict]) -> Dict[str, Any]:
+    """七分区命中次数均匀性（每期 6 个正码落入 7 区）"""
+    n = len(draws)
+    if n < 10:
+        return {'ok': False, 'reason': '期数不足'}
+    zone_hits = np.zeros(7)
+    for d in draws:
+        for num in d.get('numbers') or []:
+            z = get_zone(int(num))
+            if 1 <= z <= 7:
+                zone_hits[z - 1] += 1
+    # 各区号码数：1-7,8-14,...,43-49 → 各 7 个，完全均匀
+    expected = np.full(7, 6.0 * n / 7.0)
+    chi2 = float(np.sum((zone_hits - expected) ** 2 / expected))
+    return {
+        'ok': True, 'chi2': chi2, 'df': 6, 'p_value': _chi2_sf(chi2, 6),
+        'zone_hits': zone_hits, 'expected': float(expected[0]),
+    }
+
+
+def transition_repeat_edge_stats(draws: List[Dict]) -> Dict[str, Any]:
+    """相邻期：正码重号数、边号命中数 vs 简单期望"""
+    if len(draws) < 2:
+        return {'ok': False, 'reason': '期数不足'}
+    repeats = []
+    edges = []
+    for i in range(1, len(draws)):
+        prev = set(int(x) for x in (draws[i - 1].get('numbers') or []))
+        prev_sp = draws[i - 1].get('special')
+        prev_all = set(prev)
+        if prev_sp is not None:
+            try:
+                prev_all.add(int(prev_sp))
+            except (TypeError, ValueError):
+                pass
+        cur = set(int(x) for x in (draws[i].get('numbers') or []))
+        repeats.append(len(prev & cur))
+        edge_pool = set()
+        for r in prev_all:
+            for x in (r - 1, r + 1):
+                if 1 <= x <= 49 and x not in prev_all:
+                    edge_pool.add(x)
+        edges.append(len(edge_pool & cur))
+    # E[|prev∩cur|] = 6*6/49
+    exp_repeat = 36.0 / 49.0
+    avg_repeat = float(np.mean(repeats))
+    avg_edge = float(np.mean(edges))
+    # 边号池大小随上期变化，用观测平均池估期望
+    # 近似：平均边号池 ~ 10–14；E ≈ 6 * |pool|/49
+    # 用经验：再扫一遍平均池大小
+    pool_sizes = []
+    for i in range(1, len(draws)):
+        prev = set(int(x) for x in (draws[i - 1].get('numbers') or []))
+        prev_sp = draws[i - 1].get('special')
+        prev_all = set(prev)
+        if prev_sp is not None:
+            try:
+                prev_all.add(int(prev_sp))
+            except (TypeError, ValueError):
+                pass
+        edge_pool = set()
+        for r in prev_all:
+            for x in (r - 1, r + 1):
+                if 1 <= x <= 49 and x not in prev_all:
+                    edge_pool.add(x)
+        pool_sizes.append(len(edge_pool))
+    avg_pool = float(np.mean(pool_sizes)) if pool_sizes else 0.0
+    exp_edge = 6.0 * avg_pool / 49.0
+    return {
+        'ok': True,
+        'avg_repeat': avg_repeat,
+        'exp_repeat': exp_repeat,
+        'repeat_lift': avg_repeat / exp_repeat if exp_repeat else None,
+        'avg_edge': avg_edge,
+        'exp_edge': exp_edge,
+        'edge_lift': avg_edge / exp_edge if exp_edge else None,
+        'avg_edge_pool': avg_pool,
+        'transitions': len(repeats),
+    }
+
+
+def stability_half_split(draws: List[Dict], fdr_q: float = 0.1) -> Dict[str, Any]:
+    """前后半窗：全局 p、FDR 热号是否同向"""
+    n = len(draws)
+    if n < 20:
+        return {'ok': False, 'reason': '建议至少 20 期做半窗稳定性'}
+    mid = n // 2
+    a, b = draws[:mid], draws[mid:]
+    ga = chi2_uniform_main(a)
+    gb = chi2_uniform_main(b)
+    fa = per_number_fdr_scan(a, fdr_q)
+    fb = per_number_fdr_scan(b, fdr_q)
+    hot_a = set(fa.loc[(fa['FDR显著'] == '是') & (fa['方向'] == '偏热'), '号码'].tolist())
+    hot_b = set(fb.loc[(fb['FDR显著'] == '是') & (fb['方向'] == '偏热'), '号码'].tolist())
+    cold_a = set(fa.loc[(fa['FDR显著'] == '是') & (fa['方向'] == '偏冷'), '号码'].tolist())
+    cold_b = set(fb.loc[(fb['FDR显著'] == '是') & (fb['方向'] == '偏冷'), '号码'].tolist())
+    # 相对频率相关（无 FDR）
+    ca = count_main_number_hits(a) / max(len(a), 1)
+    cb = count_main_number_hits(b) / max(len(b), 1)
+    corr = float(np.corrcoef(ca, cb)[0, 1]) if len(a) > 1 and len(b) > 1 else None
+    return {
+        'ok': True,
+        'n_a': len(a), 'n_b': len(b),
+        'p_a': ga.get('p_value'), 'p_b': gb.get('p_value'),
+        'hot_overlap': sorted(hot_a & hot_b),
+        'cold_overlap': sorted(cold_a & cold_b),
+        'hot_a': sorted(hot_a), 'hot_b': sorted(hot_b),
+        'freq_corr': corr,
+    }
+
+
+def rolling_chi2_series(draws: List[Dict], window: int = 20) -> pd.DataFrame:
+    """滚动窗全局 χ² p 值"""
+    rows = []
+    if len(draws) < window:
+        return pd.DataFrame(rows)
+    for end in range(window, len(draws) + 1):
+        w = draws[end - window:end]
+        g = chi2_uniform_main(w)
+        period = w[-1].get('period', end)
+        rows.append({
+            '期末': period,
+            '窗末序号': end,
+            'chi2': g.get('chi2'),
+            'p值': g.get('p_value'),
+        })
+    return pd.DataFrame(rows)
+
+
+def compare_machine_regimes(draws: List[Dict], split_period: int = NEW_MACHINE_START_PERIOD) -> Dict[str, Any]:
+    """新旧机器窗对比"""
+    old = [d for d in draws if _period_to_int(d.get('period')) < split_period]
+    new = [d for d in draws if _period_to_int(d.get('period')) >= split_period]
+    out = {'ok': True, 'n_old': len(old), 'n_new': len(new), 'split': split_period}
+    out['old'] = chi2_uniform_main(old) if len(old) >= 8 else {'ok': False}
+    out['new'] = chi2_uniform_main(new) if len(new) >= 8 else {'ok': False}
+    if len(old) >= 15 and len(new) >= 15:
+        # 两窗相对频率差的最大号
+        fo = count_main_number_hits(old) / (6.0 * len(old))
+        fn = count_main_number_hits(new) / (6.0 * len(new))
+        diff = fn - fo
+        top_up = np.argsort(-diff)[:5] + 1
+        top_down = np.argsort(diff)[:5] + 1
+        out['new_hotter'] = [int(x) for x in top_up]
+        out['new_colder'] = [int(x) for x in top_down]
+        # 合并列联：2×49 不够；用能量式 χ² on normalized — 简化报告相关系数
+        out['freq_corr_old_new'] = float(np.corrcoef(fo, fn)[0, 1])
+    return out
+
+
+def diagnose_stability_light(report: Dict[str, Any]) -> Dict[str, str]:
+    """
+    综合灯：green / yellow / red
+    """
+    g = report.get('global') or {}
+    fdr_hits = report.get('fdr_hit_count', 0)
+    stab = report.get('stability') or {}
+    od = report.get('overdispersion') or {}
+    n = g.get('n') or 0
+
+    if n < 20:
+        return {
+            'level': 'yellow',
+            'label': '黄灯 · 样本偏少',
+            'advice': '期数不足，结果仅供探索；勿据此加重频率偏置。',
+        }
+
+    p = g.get('p_value')
+    stable_hot = len(stab.get('hot_overlap') or []) if stab.get('ok') else 0
+    od_p = od.get('p_value') if od.get('ok') else None
+
+    if p is not None and p < 0.01 and (fdr_hits >= 2 or stable_hot >= 1):
+        return {
+            'level': 'red',
+            'label': '红灯 · 偏离均匀且有稳定信号',
+            'advice': '考虑对 FDR 且跨半窗同向的号码做收缩加权；并持续复核。',
+        }
+    if (p is not None and p < 0.05) or fdr_hits >= 1 or (od_p is not None and od_p < 0.05):
+        return {
+            'level': 'yellow',
+            'label': '黄灯 · 边缘信号',
+            'advice': '可能有弱偏离或混合异质；先看稳定性重叠，勿全押短窗热号。',
+        }
+    return {
+        'level': 'green',
+        'label': '绿灯 · 与均匀一致',
+        'advice': '未检出可利用偏置；选号侧重覆盖/结构过滤，而非频率追热。',
+    }
+
+
+def run_machine_diagnostics(
+    draws: List[Dict],
+    *,
+    fdr_q: float = 0.1,
+    roll_window: int = 20,
+    include_special_in_counts: bool = False,
+) -> Dict[str, Any]:
+    """汇总机具诊断报告。默认只计正码（与 6/49 模型一致）。"""
+    draws = sorted(draws, key=lambda x: _period_to_int(x.get('period')))
+    # include_special 预留：当前主路径仍用正码
+    _ = include_special_in_counts
+
+    global_u = chi2_uniform_main(draws)
+    fdr_df = per_number_fdr_scan(draws, fdr_q=fdr_q) if len(draws) >= 8 else pd.DataFrame()
+    fdr_hits = int((fdr_df['FDR显著'] == '是').sum()) if len(fdr_df) else 0
+    fdr_sig = fdr_df[fdr_df['FDR显著'] == '是'].copy() if len(fdr_df) else pd.DataFrame()
+
+    report = {
+        'draws': draws,
+        'n': len(draws),
+        'period_from': draws[0].get('period') if draws else None,
+        'period_to': draws[-1].get('period') if draws else None,
+        'fdr_q': fdr_q,
+        'global': global_u,
+        'fdr_df': fdr_df,
+        'fdr_sig': fdr_sig,
+        'fdr_hit_count': fdr_hits,
+        'overdispersion': overdispersion_main(draws),
+        'odd_even': structure_odd_even_test(draws),
+        'zones': structure_zone_test(draws),
+        'transitions': transition_repeat_edge_stats(draws),
+        'stability': stability_half_split(draws, fdr_q=fdr_q),
+        'rolling': rolling_chi2_series(draws, window=roll_window),
+        'roll_window': roll_window,
+        'regimes': compare_machine_regimes(draws),
+    }
+    report['light'] = diagnose_stability_light(report)
+    return report
+
+
+def render_machine_diagnostics(all_draws: List[Dict]) -> None:
+    """回测页：机具诊断 UI"""
+    st.markdown("**🔬 机具诊断**")
+    st.caption(
+        "检验当前窗是否偏离均匀、有无 FDR 热/冷号、半窗是否稳定。"
+        "马会四套球盲抽轮换且无套号标签，本模块不输出「当前球套」；短窗热号默认不当可下注规律。"
+    )
+
+    new_only = [d for d in all_draws if _period_to_int(d.get('period')) >= NEW_MACHINE_START_PERIOD]
+    col_a, col_b, col_c, col_d = st.columns(4)
+    with col_a:
+        scope = st.selectbox(
+            "诊断范围",
+            options=["新机器", "全部历史", "自定义最近N期"],
+            index=0,
+            key="diag_scope",
+        )
+    with col_b:
+        fdr_q = st.selectbox("FDR 水平 q", options=[0.05, 0.10, 0.20], index=1, key="diag_fdr_q")
+    with col_c:
+        roll_window = st.number_input("滚动窗期数", min_value=10, max_value=80, value=20, step=5, key="diag_roll")
+    with col_d:
+        recent_n = st.number_input("最近N期", min_value=15, max_value=500, value=40, step=5, key="diag_recent_n")
+
+    if scope == "新机器":
+        diag_draws = new_only if new_only else all_draws
+        scope_note = f"新机器 {NEW_MACHINE_START_PERIOD}+（{len(diag_draws)} 期）"
+    elif scope == "全部历史":
+        diag_draws = all_draws
+        scope_note = f"全部历史（{len(diag_draws)} 期）"
+    else:
+        diag_draws = all_draws[-int(recent_n):]
+        scope_note = f"最近 {len(diag_draws)} 期"
+
+    if len(diag_draws) < 8:
+        st.warning("诊断数据不足（至少 8 期）")
+        return
+
+    report = run_machine_diagnostics(diag_draws, fdr_q=float(fdr_q), roll_window=int(roll_window))
+    light = report['light']
+    level = light['level']
+    if level == 'green':
+        st.success(f"🟢 {light['label']}  ·  {scope_note}\n\n{light['advice']}")
+    elif level == 'red':
+        st.error(f"🔴 {light['label']}  ·  {scope_note}\n\n{light['advice']}")
+    else:
+        st.warning(f"🟡 {light['label']}  ·  {scope_note}\n\n{light['advice']}")
+
+    g = report['global']
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("期数", report['n'])
+    with m2:
+        st.metric("全局 χ²", f"{g['chi2']:.1f}" if g.get('chi2') is not None else "—")
+    with m3:
+        pv = g.get('p_value')
+        st.metric("χ² p值", f"{pv:.3f}" if pv is not None else "—")
+    with m4:
+        st.metric("FDR 显著号", report['fdr_hit_count'])
+    with m5:
+        od = report['overdispersion']
+        ratio = od.get('ratio') if od.get('ok') else None
+        st.metric("过离散比", f"{ratio:.2f}" if ratio is not None else "—")
+
+    if g.get('low_expected'):
+        st.caption("单号期望次数 < 5，χ² 近似偏粗糙；解读宜保守。")
+
+    # —— FDR 表 ——
+    st.markdown("**FDR 热/冷号扫描**（相对每期命中率 6/49，BH 校正）")
+    fdr_df = report['fdr_df']
+    if len(fdr_df):
+        show = fdr_df.head(15).copy()
+        show['p值'] = show['p值'].map(lambda x: f"{x:.4f}")
+        st.dataframe(show, use_container_width=True, hide_index=True)
+        sig = report['fdr_sig']
+        if len(sig):
+            hot = sig.loc[sig['方向'] == '偏热', '号码'].tolist()
+            cold = sig.loc[sig['方向'] == '偏冷', '号码'].tolist()
+            st.caption(f"显著偏热: {hot or '无'}　|　显著偏冷: {cold or '无'}")
+        else:
+            st.caption("当前 FDR 水平下无显著单号。")
+
+    # —— 结构 / 转移 ——
+    st.markdown("**结构与期际指标**")
+    c1, c2, c3 = st.columns(3)
+    oe = report['odd_even']
+    zn = report['zones']
+    tr = report['transitions']
+    with c1:
+        if oe.get('ok'):
+            st.write(f"奇偶分布 χ² p = **{oe['p_value']:.3f}**")
+        else:
+            st.write("奇偶检验: 样本不足")
+    with c2:
+        if zn.get('ok'):
+            st.write(f"七分区 χ² p = **{zn['p_value']:.3f}**")
+        else:
+            st.write("分区检验: 样本不足")
+    with c3:
+        if tr.get('ok'):
+            st.write(
+                f"重号 lift **{tr['repeat_lift']:.2f}×**　"
+                f"边号 lift **{tr['edge_lift']:.2f}×**"
+            )
+            st.caption(f"重号均 {tr['avg_repeat']:.2f} (期望 {tr['exp_repeat']:.2f})；"
+                       f"边号均 {tr['avg_edge']:.2f} (期望 {tr['exp_edge']:.2f})")
+        else:
+            st.write("期际指标: 样本不足")
+
+    od = report['overdispersion']
+    if od.get('ok'):
+        st.caption(
+            f"过离散：观测方差 {od['var_obs']:.2f} / 理论 {od['var_theory']:.2f} "
+            f"= {od['ratio']:.2f}（p≈{od['p_value']:.3f}）。偏高可能暗示多套球/异质混合，但不能点名球套。"
+        )
+
+    # —— 稳定性 ——
+    st.markdown("**半窗稳定性**")
+    stab = report['stability']
+    if stab.get('ok'):
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.write(f"前半 p={stab['p_a']:.3f}（{stab['n_a']}期）")
+        with sc2:
+            st.write(f"后半 p={stab['p_b']:.3f}（{stab['n_b']}期）")
+        with sc3:
+            corr = stab.get('freq_corr')
+            st.write(f"频率相关 **{corr:.2f}**" if corr is not None else "频率相关 —")
+        st.caption(
+            f"两半窗共同 FDR 偏热: {stab['hot_overlap'] or '无'}　|　"
+            f"共同偏冷: {stab['cold_overlap'] or '无'}　"
+            f"（仅重叠号才较值得考虑加权）"
+        )
+    else:
+        st.caption(stab.get('reason', '稳定性未计算'))
+
+    # —— 滚动 χ² ——
+    roll = report['rolling']
+    if len(roll):
+        st.markdown(f"**滚动 {report['roll_window']} 期 χ² p 值**")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=roll['窗末序号'], y=roll['p值'],
+            mode='lines+markers', name='p值',
+            hovertext=roll['期末'].astype(str),
+        ))
+        fig.add_hline(y=0.05, line_dash='dash', line_color='orange', annotation_text='0.05')
+        fig.update_layout(
+            height=280, margin=dict(l=20, r=20, t=30, b=30),
+            xaxis_title='窗末（按时间序）', yaxis_title='p值',
+            yaxis=dict(range=[0, 1]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # —— 新旧机 ——
+    st.markdown("**新旧机器对比**")
+    reg = report['regimes']
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        st.write(f"旧机 <{reg['split']}：{reg['n_old']} 期")
+        if reg.get('old', {}).get('ok') and reg['old'].get('p_value') is not None:
+            st.caption(f"χ² p = {reg['old']['p_value']:.3f}")
+    with rc2:
+        st.write(f"新机 ≥{reg['split']}：{reg['n_new']} 期")
+        if reg.get('new', {}).get('ok') and reg['new'].get('p_value') is not None:
+            st.caption(f"χ² p = {reg['new']['p_value']:.3f}")
+    with rc3:
+        if reg.get('freq_corr_old_new') is not None:
+            st.write(f"频率相关 **{reg['freq_corr_old_new']:.2f}**")
+            st.caption(f"新机相对更热: {reg.get('new_hotter')}")
+            st.caption(f"新机相对更冷: {reg.get('new_colder')}")
+        else:
+            st.caption("新旧机样本不足以对比")
+
+    with st.expander("诊断指标说明", expanded=False):
+        st.markdown(r"""
+- **全局 χ²**：49 个正码出现次数是否像均匀 \(E=6n/49\)
+- **FDR 热号**：单号二项检验 + Benjamini–Hochberg，控制假发现
+- **稳定性灯**：综合全局 p、FDR、半窗重叠、过离散
+- **过离散比**：>1 且显著 → 可能异质混合（多套球等），无法指认套号
+- **奇偶 / 七分区**：结构形态是否异常
+- **重号 / 边号 lift**：期际依赖是否偏离组合期望（≈1 为正常）
+- **滚动 p 值**：短期窗是否突然「看起来不随机」（多为噪声）
+- **新旧机对比**：换机断点后的频率偏移
+        """)
+
+
 def is_auto_train_window_mode() -> bool:
     return st.session_state.get('auto_train_params_mode', False)
 
@@ -5466,6 +6063,9 @@ else:
         format_train_config_summary(bt_cfg)
         + " · 混合训练：规则=新机器，ML=全历史；每期 walk-forward 不含被测期"
     )
+
+    with st.expander("🔬 机具诊断（χ² / FDR / 稳定性）", expanded=False):
+        render_machine_diagnostics(sorted_backtest_draws)
     
     # ========== 回测参数设置 ==========
     with st.expander("⚙️ 回测参数设置", expanded=False):
